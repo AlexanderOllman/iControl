@@ -97,13 +97,22 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable iphone_hid_gadget.service
 
-echo "========== 5. Python venv + packages =========="
+echo "========== 5. Adding udev rule for HID gadget permissions =========="
+sudo tee /etc/udev/rules.d/99-hid-gadget.rules >/dev/null <<'EOF'
+# Give everyone RW access to hidg0, hidg1 …
+KERNEL=="hidg*", MODE="0666"
+EOF
+
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+
+echo "========== 6. Python venv + packages =========="
 mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install --upgrade pip
 pip install openai python-dotenv opencv-python
 
-echo "========== 6. Done. Rebooting in 5 seconds =========="
+echo "========== 7. Done. Rebooting in 5 seconds =========="
 sleep 5
 sudo reboot
