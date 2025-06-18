@@ -9,7 +9,7 @@ sudo apt update
 sudo apt install -y \
   python3-pip python3-venv python3-opencv python3-dev \
   git curl unzip \
-  libatlas-base-dev libjpeg-dev libtiff5 libopenjp2-7 \
+  libatlas-base-dev libjpeg-dev libtiff-dev libopenjp2-7 \
   libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
   libxvidcore-dev libx264-dev libhidapi-dev
 
