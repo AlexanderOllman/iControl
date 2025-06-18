@@ -14,7 +14,7 @@ sudo apt update
 sudo apt install -y \
   python3-venv python3-pip python3-dbus python3-evdev \
   bluez bluez-tools libbluetooth-dev \
-  libatlas-base-dev libjpeg-dev libtiff5 libopenjp2-7 \
+  libatlas-base-dev libjpeg-dev libtiff6 libopenjp2-7 \
   libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
   libxvidcore-dev libx264-dev python3-opencv
 
