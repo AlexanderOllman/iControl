@@ -19,9 +19,9 @@ sudo apt install -y \
   libxvidcore-dev libx264-dev python3-opencv
 
 echo "=== 2. Configure Bluetooth daemon ==="
-sudo sed -i 's/^#Name = .*/Name = Pi-HID/' /etc/bluetooth/main.conf
-sudo sed -i 's/^#Class = .*/Class = 0x002540/' /etc/bluetooth/main.conf   # Peripheral, Keyboard, Mouse
-sudo sed -i 's/^#ControllerMode = .*/ControllerMode = bredr/' /etc/bluetooth/main.conf
+sudo sed -i 's|^#Name = .*|Name = Pi-HID|' /etc/bluetooth/main.conf
+sudo sed -i 's|^#Class = .*|Class = 0x002540|' /etc/bluetooth/main.conf
+sudo sed -i 's|^#ControllerMode = .*|ControllerMode = bredr|' /etc/bluetooth/main.conf
 sudo sed -i 's/^ExecStart=.*/ExecStart=\\/usr\\/lib\\/bluetooth\\/bluetoothd --noplugin=sap -P input/' \
   /lib/systemd/system/bluetooth.service
 sudo systemctl daemon-reload
