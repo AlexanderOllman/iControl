@@ -79,8 +79,23 @@ echo "✓ iPhone HID gadget is live (keyboard + touch)"
 EOF
 sudo chmod +x /usr/bin/iphone_hid_gadget.sh
 
-echo "—— Adding gadget script to /etc/rc.local ——"
-sudo sed -i '/^exit 0/i /usr/bin/iphone_hid_gadget.sh' /etc/rc.local
+echo "—— Creating systemd service for HID gadget ——"
+sudo tee /etc/systemd/system/iphone_hid_gadget.service >/dev/null <<'EOF'
+[Unit]
+Description=iPhone HID Gadget Service
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/iphone_hid_gadget.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable iphone_hid_gadget.service
 
 echo "========== 5. Python venv + packages =========="
 mkdir -p ~/iControl
