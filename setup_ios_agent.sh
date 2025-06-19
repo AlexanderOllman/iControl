@@ -1,59 +1,51 @@
 #!/bin/bash
-# Bootstrap Raspberry Pi 5 for:
-#   • UVC capture stick on USB-A
-#   • Bluetooth Classic HID (keyboard + mouse) over on-board radio
-# Installs system deps, drops a bt-HID python bridge, creates systemd
-# services, and reboots.  DOES NOT launch your vision agent; that stays
-# separate.
-
+# setup_bt_ios_agent_pi5.sh  –  configure Pi-5 for
+#   • HDMI→USB capture stick (video)
+#   • Bluetooth Classic HID (input)
+#   • TCP bridge at 127.0.0.1:5555 for TAP/SWIPE/TYPE
 set -euo pipefail
-sudo -v   # prompt for sudo up-front
+sudo -v    # prompt for sudo password up-front
 
-echo "=== 1. APT update & packages ==="
+echo "=== 1. APT update & base packages ==="
 sudo apt update
 sudo apt install -y \
   python3-venv python3-pip python3-dbus python3-evdev \
   bluez bluez-tools libbluetooth-dev \
   libatlas-base-dev libjpeg-dev libtiff6 libopenjp2-7 \
   libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
-  libxvidcore-dev libx264-dev python3-opencv
+  libxvidcore-dev libx264-dev python3-opencv git curl unzip
 
-echo "=== 2. Configure Bluetooth daemon ==="
-
+echo "=== 2. Configure BlueZ daemon (Pi-HID) ==="
 cfg=/etc/bluetooth/main.conf
-
-# helper: update or append one KEY VALUE line
-set_bluez() {
-  local key=$1 val=$2
+patch_bluez () {
+  local key="$1" val="$2"
   if grep -qE "^[#[:space:]]*${key}[[:space:]]*=" "$cfg"; then
     sudo sed -i "s|^[#[:space:]]*${key}[[:space:]]*=.*|${key} = ${val}|" "$cfg"
   else
-    echo "${key} = ${val}" | sudo tee -a "$cfg"
+    echo "${key} = ${val}" | sudo tee -a "$cfg" >/dev/null
   fi
 }
+patch_bluez "Name"            "Pi-HID"
+patch_bluez "Class"           "0x002540"   # Peripheral | Keyboard | Pointing
+patch_bluez "ControllerMode"  "bredr"      # Classic (not LE for now)
 
-set_bluez "Name"           "Pi-HID"
-set_bluez "Class"          "0x002540"      # Peripheral / Keyboard / Pointing
-set_bluez "ControllerMode" "bredr"         # enable Classic for HID
-
-# ensure bluetoothd loads the input profile
+# Ensure bluetoothd loads 'input' profile
 sudo sed -i \
   's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
   /lib/systemd/system/bluetooth.service
-
 sudo systemctl daemon-reload
-sudo systemctl restart bluetooth
+sudo systemctl restart  bluetooth.service
 
-echo "=== 3. Enable automatic pairing & discoverability ==="
+echo "=== 3. Auto-pairing /discoverable agent (bt-agent.service) ==="
 sudo tee /etc/systemd/system/bt-agent.service >/dev/null <<'UNIT'
 [Unit]
-Description=Simple Bluetooth agent (NoInputNoOutput)
+Description=Simple Bluetooth agent (NoInputNoOutput, always discoverable)
 After=bluetooth.service
 Requires=bluetooth.service
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/bluetoothctl --timeout=0 <<'BTCMD'
+Type=exec
+ExecStart=/usr/bin/bluetoothctl --timeout=0 <<'BTC'
 power on
 discoverable on
 pairable on
@@ -61,7 +53,7 @@ agent NoInputNoOutput
 default-agent
 system-alias Pi-HID
 quit
-BTCMD
+BTC
 
 [Install]
 WantedBy=multi-user.target
@@ -69,30 +61,23 @@ UNIT
 sudo systemctl enable bt-agent.service
 sudo systemctl start  bt-agent.service
 
-echo "=== 4. udev rule for /dev/uinput (evdev) ==="
+echo "=== 4. udev rule + module for /dev/uinput ==="
 echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-sudo modprobe uinput   # now
+echo "uinput" | sudo tee -a /etc/modules >/dev/null
+sudo modprobe uinput
 
-echo "=== 5. Drop bt_hid_bridge.py ==="
+echo "=== 5. Drop TCP→uinput Bluetooth HID bridge ==="
 sudo tee /usr/local/bin/bt_hid_bridge.py >/dev/null <<'PY'
 #!/usr/bin/env python3
-"""
-Listens on localhost:5555 for 1-line commands:
-  TAP x y        (norm 0-1)
-  SWIPE dx dy
-  TYPE text\nwith\nnewlines
-Bridges them to Bluetooth HID via evdev → BlueZ input plugin.
-"""
-import socket, re, time
+import socket,time
 from evdev import UInput, ecodes as e
 
 ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y],
-             e.EV_KEY:e.keys.values()}, name="Pi-HID")
+             e.EV_KEY:list(e.keys.values())}, name="Pi-HID")
 
 def tap(x,y):
-    # Simple relative jump toward target then click
     ui.write(e.EV_REL,e.REL_X,int((x-0.5)*200))
-    ui.write(e.EV_REL,e.REL_Y,int((y-0.5)*200))
+    ui.write(e.EV_REL,e.REL_Y=int((y-0.5)*200))
     ui.write(e.EV_KEY,e.BTN_LEFT,1); ui.syn(); time.sleep(0.05)
     ui.write(e.EV_KEY,e.BTN_LEFT,0); ui.syn()
 
@@ -107,34 +92,32 @@ KEYMAP={**{c:getattr(e,f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 def type_text(txt):
     for ch in txt:
-        kc=KEYMAP.get(ch.upper(),None)
-        if not kc: continue
-        ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
+        kc=KEYMAP.get(ch.upper())
+        if kc: ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
 
 sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 sock.bind(("127.0.0.1",5555)); sock.listen(1)
-print("bt_hid_bridge: listening on 127.0.0.1:5555")
+print("bt_hid_bridge: waiting on 127.0.0.1:5555")
 while True:
     conn,_=sock.accept()
     with conn:
         for line in conn.makefile():
-            m=line.strip().split(' ',2)
-            if not m: continue
-            cmd=m[0].upper()
+            cmds=line.strip().split(' ',2)
+            if not cmds: continue
             try:
-                if cmd=="TAP":   tap(float(m[1]),float(m[2]))
-                elif cmd=="SWIPE": swipe(float(m[1]),float(m[2]))
-                elif cmd=="TYPE": type_text(m[1] if len(m)>1 else "")
-            except Exception as ex:
-                print("bad cmd:",line,ex)
+                if cmds[0]=="TAP":   tap(float(cmds[1]),float(cmds[2]))
+                elif cmds[0]=="SWIPE": swipe(float(cmds[1]),float(cmds[2]))
+                elif cmds[0]=="TYPE": type_text(cmds[1] if len(cmds)>1 else "")
+            except Exception as err:
+                print("bad cmd",line,err)
 PY
 sudo chmod +x /usr/local/bin/bt_hid_bridge.py
 
-echo "=== 6. Systemd service for HID bridge ==="
+echo "=== 6. systemd unit for HID bridge ==="
 sudo tee /etc/systemd/system/pi-bthid.service >/dev/null <<'UNIT'
 [Unit]
-Description=Pi Bluetooth HID Bridge (GPIO agent)
-After=bluetooth.service
+Description=Pi Bluetooth HID Bridge (TCP→uinput)
+After=bluetooth.service bt-agent.service
 Requires=bluetooth.service
 
 [Service]
@@ -152,8 +135,8 @@ mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install --upgrade pip
-pip install openai python-dotenv opencv-python
+pip install openai python-dotenv opencv-python python-evdev python-dbus
 
-echo "=== ✔  All done.  Rebooting in 5 seconds ==="
+echo "=== ✔  Setup complete — rebooting in 5 s ==="
 sleep 5
 sudo reboot
