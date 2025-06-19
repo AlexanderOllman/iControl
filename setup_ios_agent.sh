@@ -1,43 +1,87 @@
 #!/usr/bin/env bash
-# Pi‑5 Classic‑Bluetooth HID (keyboard+mouse) with AUTO‑PIN entry
-# Bookworm 64‑bit – vA2 (2025‑06‑19)
-# ‑ Installs deps, enables BR/EDR keyboard+mouse SDP record
-# ‑ Starts bt_autokey.py that receives the 6‑digit pass‑key from BlueZ and
-#   types it via /dev/uinput so iOS pairing succeeds automatically.
+# Pi‑5 **BLE‑HID (mouse+basic keys) bridge** for iOS – vB1  (2025‑06‑19)
+# - Advertises BLE “Generic Mouse” with HID over GATT (HOGP).
+# - Creates a userspace UHID device so BlueZ exposes the HID service.
+# - GPT actions are sent over TCP → /dev/uinput (same bridge as before).
+#   iPhone pairs with **NO PIN**.
 set -euo pipefail
 sudo -v
 
 ################################ 1  Packages #################################
 sudo apt update
 sudo apt install -y \
-  python3-venv python3-pip python3-dev build-essential \
-  python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
-  python3-evdev bluez bluez-tools libbluetooth-dev git
+  python3-venv python3-pip python3-evdev \
+  bluez bluez-tools libbluetooth-dev git \
+  python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0
 
-################################ 2  BlueZ ####################################
+################################ 2  BlueZ BLE‑only config ####################
 CFG=/etc/bluetooth/main.conf
 patch(){ grep -qE "^[#[:space:]]*$1" "$CFG" && \
          sudo sed -i "s|^[#[:space:]]*$1.*|$1 = $2|" "$CFG" || \
          echo "$1 = $2" | sudo tee -a "$CFG" >/dev/null; }
 patch Name Pi-HID
-patch Class 0x002540       # Peripheral | Keyboard | Pointing
-patch ControllerMode bredr
+patch Class 0x002580           # Peripheral | Mouse only (for appearance)
+patch ControllerMode dual      # enable BR/EDR + LE (HID over GATT)
 patch DiscoverableTimeout 0
 
-sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
+sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --experimental --noplugin=sap -P battery,hog|' \
   /lib/systemd/system/bluetooth.service
 
-################################ 2.1 Kernel hidp/uhid ########################
-sudo modprobe hidp uhid
-for m in hidp uhid; do grep -qxF "$m" /etc/modules || echo "$m" | sudo tee -a /etc/modules; done
+################################ 2.1 Kernel uhid ################################
+sudo modprobe uhid
+grep -qxF "uhid" /etc/modules || echo "uhid" | sudo tee -a /etc/modules >/dev/null
 sudo systemctl daemon-reload
 sudo rfkill unblock bluetooth
 sudo systemctl restart bluetooth
 
-# Classic HID SDP record
-sudo sdptool add HID || true
+################################ 3  UHID mouse device ########################
+# Report‑descriptor: 3‑button mouse with X/Y rel
+sudo tee /usr/local/bin/uhid_mouse.py >/dev/null <<'PY'
+#!/usr/bin/env python3
+import uhid, os, signal, sys
+RD = bytes([
+ 0x05,0x01,  # UsagePg Generic Desktop
+ 0x09,0x02,  # Usage Mouse
+ 0xA1,0x01,  # Collection Application
+ 0x09,0x01,  #   Usage Pointer
+ 0xA1,0x00,  #   Collection Physical
+ 0x05,0x09,  #     UsagePg Buttons
+ 0x19,0x01,0x29,0x03,      #     Usage Min/Max 1‑3
+ 0x15,0x00,0x25,0x01,      #     Logical Min/Max 0‑1
+ 0x95,0x03,0x75,0x01,0x81,0x02,  #   3 bits (buttons)
+ 0x95,0x01,0x75,0x05,0x81,0x03,  #   5‑bit padding
+ 0x05,0x01,  #     UsagePg Generic Desktop
+ 0x09,0x30,0x09,0x31,      #     X, Y
+ 0x15,0x81,0x25,0x7F,      #     Logical -127 .. 127
+ 0x75,0x08,0x95,0x02,0x81,0x06,  #   2 bytes, relative
+ 0xC0,0xC0])
 
-################################ 3  bt_init.sh (KeyboardDisplay agent) #######
+dev = uhid.UHIDDevice(name='Pi‑HID', phys='pi', uniq='1', descriptors=RD)
+dev.create()
+print('UHID mouse created')
+try:
+    dev.run()  # blocks forever, relays events from /dev/uhid to BlueZ
+except KeyboardInterrupt:
+    dev.destroy()
+PY
+sudo chmod +x /usr/local/bin/uhid_mouse.py
+
+sudo tee /etc/systemd/system/uhid-mouse.service >/dev/null <<'UNIT'
+[Unit]
+Description=User‑space UHID Mouse (BLE‑HID backend)
+After=systemd-udev-settle.service
+
+[Service]
+ExecStart=/usr/local/bin/uhid_mouse.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable --now uhid-mouse.service
+
+################################ 4  bt_init.sh – BLE advertise ###############
 sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
 #!/bin/bash
 set -e
@@ -46,8 +90,13 @@ bluetoothctl <<EOF
 power on
 pairable on
 discoverable on
-agent KeyboardDisplay
+agent NoInputNoOutput
 default-agent
+menu advertise
+appearance 962                              # Generic Mouse appearance
+uuids 00001812-0000-1000-8000-00805f9b34fb   # HID Service UUID
+back
+advertise on
 system-alias Pi-HID
 quit
 EOF
@@ -56,9 +105,9 @@ sudo chmod +x /usr/local/sbin/bt_init.sh
 
 sudo tee /etc/systemd/system/bt-agent.service >/dev/null <<'UNIT'
 [Unit]
-Description=Init BlueZ (KeyboardDisplay agent)
-After=bluetooth.target
-Requires=bluetooth.target
+Description=Init BlueZ BLE HID advertising (NoInputNoOutput)
+After=bluetooth.target uhid-mouse.service
+Requires=bluetooth.target uhid-mouse.service
 
 [Service]
 Type=oneshot
@@ -70,93 +119,32 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now bt-agent.service
 
-################################ 4  uinput perms ##############################
+################################ 5  uinput perms ##############################
 echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-uinput.rules
 sudo modprobe uinput
 sudo udevadm trigger /dev/uinput || true
 
-################################ 5  Python venv ###############################
+################################ 6  Python venv ###############################
 mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install -q --upgrade pip
-pip install -q evdev            # dbus & gi come from system packages
+pip install -q evdev
 
 deactivate
 
-################################ 6  bt_autokey.py #############################
-sudo tee /usr/local/bin/bt_autokey.py >/dev/null <<'PY'
-#!/usr/bin/env python3
-"""Auto‑types the 6‑digit pass‑key shown on iOS during Classic‑HID pairing."""
-import time, dbus, dbus.mainloop.glib
-from gi.repository import GLib
-from evdev import UInput, ecodes as e
-
-UI=UInput({e.EV_KEY:[e.KEY_ENTER,*[getattr(e,f'KEY_{i}') for i in range(10)]]}, name='AutoKey')
-KEY={str(i):getattr(e,f'KEY_{i}') for i in range(10)}
-
-def type_code(code:str):
-    for ch in code:
-        UI.write(e.EV_KEY, KEY[ch], 1); UI.syn(); UI.write(e.EV_KEY, KEY[ch], 0); UI.syn(); time.sleep(0.05)
-    UI.write(e.EV_KEY, e.KEY_ENTER, 1); UI.syn(); UI.write(e.EV_KEY, e.KEY_ENTER, 0); UI.syn()
-
-class Agent(dbus.service.Object):
-    @dbus.service.method('org.bluez.Agent1', in_signature='o', out_signature='')
-    def AuthorizeService(self, dev, uuid): pass
-
-    @dbus.service.method('org.bluez.Agent1', in_signature='o', out_signature='')
-    def RequestAuthorization(self, dev): pass
-
-    @dbus.service.method('org.bluez.Agent1', in_signature='ouq', out_signature='')
-    def DisplayPasskey(self, dev, passkey, entered):
-        code=f"{passkey:06d}"
-        print('Typing passkey', code)
-        type_code(code)
-
-    @dbus.service.method('org.bluez.Agent1', in_signature='', out_signature='')
-    def Release(self): pass
-
-dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-bus=dbus.SystemBus()
-path='/org/bluez/AutoKey'
-agent=Agent(bus,path)
-manager=dbus.Interface(bus.get_object('org.bluez','/org/bluez'),'org.bluez.AgentManager1')
-manager.RegisterAgent(path,'KeyboardDisplay')
-manager.RequestDefaultAgent(path)
-print('bt_autokey running')
-GLib.MainLoop().run()
-PY
-sudo chmod +x /usr/local/bin/bt_autokey.py
-
-sudo tee /etc/systemd/system/bt-autokey.service >/dev/null <<'UNIT'
-[Unit]
-Description=Auto pass‑key typer for Classic‑HID pairing
-After=bluetooth.target
-Requires=bluetooth.target
-
-[Service]
-ExecStart=/usr/bin/env python3 /usr/local/bin/bt_autokey.py
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-sudo systemctl daemon-reload
-sudo systemctl enable --now bt-autokey.service
-
-################################ 7  Bridge script #############################
-# (existing /usr/local/bin/bt_hid_bridge.py works)
+################################ 7  Bridge script (unchanged) #################
+# Assumes /usr/local/bin/bt_hid_bridge.py already present from previous runs.
 
 ################################ 8  Service ###################################
 VENVPY=/home/aollman/iControl/venv/bin/python3
 sudo tee /etc/systemd/system/pi-bthid.service >/dev/null <<UNIT
 [Unit]
-Description=Pi Bluetooth HID Bridge (TCP→uinput)
-After=bluetooth.target systemd-udev-settle.service
-Requires=bluetooth.target
+Description=Pi BLE HID Bridge (TCP→uinput)
+After=bluetooth.target systemd-udev-settle.service bt-agent.service
+Requires=bluetooth.target bt-agent.service
 
 [Service]
-ExecStartPre=/sbin/modprobe hidp
 ExecStartPre=/sbin/modprobe uhid
 ExecStart=${VENVPY} /usr/local/bin/bt_hid_bridge.py
 Restart=on-failure
@@ -168,4 +156,4 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now pi-bthid.service
 
 ################################ Finish #######################################
-printf '\n✔ Classic‑HID setup complete – rebooting in 5 s\n'; sleep 5; sudo reboot
+printf '\n✔ BLE‑HID setup complete – rebooting in 5 s\n'; sleep 5; sudo reboot
