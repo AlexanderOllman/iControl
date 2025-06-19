@@ -135,7 +135,7 @@ mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install --upgrade pip
-pip install openai python-dotenv opencv-python python-evdev python-dbus
+pip install openai python-dotenv opencv-python
 
 echo "=== ✔  Setup complete — rebooting in 5 s ==="
 sleep 5
