@@ -122,7 +122,15 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now bt-agent.service
 
-################################ 5  uinput perms ##############################
+################################ 5  uinput / uhid perms ######################
+# make both character devices world‑writable so non‑root bridge can open them
+cat <<'RULES' | sudo tee /etc/udev/rules.d/99-hid-perms.rules
+KERNEL=="uinput", MODE="0666"
+KERNEL=="uhid",   MODE="0666"
+RULES
+sudo udevadm control --reload-rules
+sudo modprobe uinput uhid
+sudo udevadm trigger /dev/uinput /dev/uhid || true
 echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-uinput.rules
 sudo modprobe uinput
 sudo udevadm trigger /dev/uinput || true
