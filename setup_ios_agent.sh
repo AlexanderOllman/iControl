@@ -19,17 +19,27 @@ sudo apt install -y \
   libxvidcore-dev libx264-dev python3-opencv
 
 echo "=== 2. Configure Bluetooth daemon ==="
-# Name = Pi-HID
-sudo sed -i 's@^#\?Name[[:space:]]*=.*@Name = Pi-HID@' /etc/bluetooth/main.conf
 
-# Class = 0x002540  (Major: Peripheral, Minor: Keyboard/Pointing)
-sudo sed -i 's@^#\?Class[[:space:]]*=.*@Class = 0x002540@' /etc/bluetooth/main.conf
+cfg=/etc/bluetooth/main.conf
 
-# ControllerMode = bredr  (enable Classic for HID)
-sudo sed -i 's@^#\?ControllerMode[[:space:]]*=.*@ControllerMode = bredr@' /etc/bluetooth/main.conf
+# helper: update or append one KEY VALUE line
+set_bluez() {
+  local key=$1 val=$2
+  if grep -qE "^[#[:space:]]*${key}[[:space:]]*=" "$cfg"; then
+    sudo sed -i "s|^[#[:space:]]*${key}[[:space:]]*=.*|${key} = ${val}|" "$cfg"
+  else
+    echo "${key} = ${val}" | sudo tee -a "$cfg"
+  fi
+}
 
-sudo sed -i 's/^ExecStart=.*/ExecStart=\\/usr\\/lib\\/bluetooth\\/bluetoothd --noplugin=sap -P input/' \
+set_bluez "Name"           "Pi-HID"
+set_bluez "Class"          "0x002540"      # Peripheral / Keyboard / Pointing
+set_bluez "ControllerMode" "bredr"         # enable Classic for HID
+
+# ensure bluetoothd loads the input profile
+sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/lib/bluetooth/bluetoothd --noplugin=sap -P input|' \
   /lib/systemd/system/bluetooth.service
+
 sudo systemctl daemon-reload
 sudo systemctl restart bluetooth
 
