@@ -20,7 +20,7 @@ patch(){
     echo "$k = $v" | sudo tee -a "$CFG" >/dev/null
 }
 patch Name Pi-HID
-patch Class 0x002540
+patch Class 0x002580
 patch ControllerMode bredr
 patch DiscoverableTimeout 0
 # replace the entire ExecStart line and strip any stray --noplugin=input
