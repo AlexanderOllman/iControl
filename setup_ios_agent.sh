@@ -36,33 +36,31 @@ sudo systemctl daemon-reload
 sudo rfkill unblock bluetooth
 sudo systemctl restart bluetooth
 
-################################ 3  UHID mouse device ########################
+################################ 3  Python venv (for uhid lib) ################
+mkdir -p ~/iControl
+python3 -m venv ~/iControl/venv
+source ~/iControl/venv/bin/activate
+pip install -q --upgrade pip
+pip install -q evdev uhid
+
+deactivate
+
+################################ 4  UHID mouse device ########################
 # Report‑descriptor: 3‑button mouse with X/Y rel
 sudo tee /usr/local/bin/uhid_mouse.py >/dev/null <<'PY'
 #!/usr/bin/env python3
-import uhid, os, signal, sys
+import uhid, time
 RD = bytes([
- 0x05,0x01,  # UsagePg Generic Desktop
- 0x09,0x02,  # Usage Mouse
- 0xA1,0x01,  # Collection Application
- 0x09,0x01,  #   Usage Pointer
- 0xA1,0x00,  #   Collection Physical
- 0x05,0x09,  #     UsagePg Buttons
- 0x19,0x01,0x29,0x03,      #     Usage Min/Max 1‑3
- 0x15,0x00,0x25,0x01,      #     Logical Min/Max 0‑1
- 0x95,0x03,0x75,0x01,0x81,0x02,  #   3 bits (buttons)
- 0x95,0x01,0x75,0x05,0x81,0x03,  #   5‑bit padding
- 0x05,0x01,  #     UsagePg Generic Desktop
- 0x09,0x30,0x09,0x31,      #     X, Y
- 0x15,0x81,0x25,0x7F,      #     Logical -127 .. 127
- 0x75,0x08,0x95,0x02,0x81,0x06,  #   2 bytes, relative
- 0xC0,0xC0])
+ 0x05,0x01,0x09,0x02,0xA1,0x01,0x09,0x01,0xA1,0x00,
+ 0x05,0x09,0x19,0x01,0x29,0x03,0x15,0x00,0x25,0x01,
+ 0x95,0x03,0x75,0x01,0x81,0x02,0x95,0x01,0x75,0x05,0x81,0x03,
+ 0x05,0x01,0x09,0x30,0x09,0x31,0x15,0x81,0x25,0x7F,
+ 0x75,0x08,0x95,0x02,0x81,0x06,0xC0,0xC0])
 
-dev = uhid.UHIDDevice(name='Pi‑HID', phys='pi', uniq='1', descriptors=RD)
-dev.create()
-print('UHID mouse created')
+dev = uhid.UHIDDevice(name='Pi-HID', phys='pi', uniq='1', descriptors=RD)
+print('UHID mouse created'); dev.create();
 try:
-    dev.run()  # blocks forever, relays events from /dev/uhid to BlueZ
+    while True: time.sleep(3600)
 except KeyboardInterrupt:
     dev.destroy()
 PY
@@ -80,8 +78,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 UNIT
-sudo systemctl daemon-reload
-sudo systemctl enable --now uhid-mouse.service
+
 sudo systemctl enable --now uhid-mouse.service
 
 ################################ 4  bt_init.sh – BLE advertise ###############
