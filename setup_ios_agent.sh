@@ -1,12 +1,16 @@
-#!/bin/bash
-# setup_bt_ios_agent_pi5.sh  –  configure Pi-5 for
-#   • HDMI→USB capture stick (video)
-#   • Bluetooth Classic HID (input)
-#   • TCP bridge at 127.0.0.1:5555 for TAP/SWIPE/TYPE
+#!/usr/bin/env bash
+# Pi‑5 Bluetooth‑HID + UVC capture one‑shot installer (Bookworm 64‑bit)
+# ‑ Installs system deps
+# ‑ Configures BlueZ for "Pi‑HID" (discoverable, pairable, NoInputNoOutput)
+# ‑ Deploys bt_init.sh (+ systemd unit)  → makes adapter visible at boot
+# ‑ Deploys TCP→uinput bridge (bt_hid_bridge.py) inside python venv
+# ‑ Creates pi‑bthid.service using venv’s python
+# ‑ Creates ~/iControl/venv with OpenAI + OpenCV packages
+# After reboot:  pair iPhone ▸ Pi‑HID, then run auto_ios_agent.py
 set -euo pipefail
-sudo -v    # prompt for sudo password up-front
+sudo -v   # ask for sudo pwd upfront
 
-echo "=== 1. APT update & base packages ==="
+### 1  APT
 sudo apt update
 sudo apt install -y \
   python3-venv python3-pip python3-dbus python3-evdev \
@@ -15,69 +19,78 @@ sudo apt install -y \
   libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
   libxvidcore-dev libx264-dev python3-opencv git curl unzip
 
-echo "=== 2. Configure BlueZ daemon (Pi-HID) ==="
-cfg=/etc/bluetooth/main.conf
-patch_bluez () {
-  local key="$1" val="$2"
-  if grep -qE "^[#[:space:]]*${key}[[:space:]]*=" "$cfg"; then
-    sudo sed -i "s|^[#[:space:]]*${key}[[:space:]]*=.*|${key} = ${val}|" "$cfg"
-  else
-    echo "${key} = ${val}" | sudo tee -a "$cfg" >/dev/null
-  fi
+### 2  BlueZ main.conf tweaks
+CFG=/etc/bluetooth/main.conf
+patch_bluez(){
+  local k="$1" v="$2"; grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$CFG" && \
+    sudo sed -i "s|^[#[:space:]]*${k}[[:space:]]*=.*|${k} = ${v}|" "$CFG" || \
+    echo "${k} = ${v}" | sudo tee -a "$CFG" >/dev/null;
 }
-patch_bluez "Name"            "Pi-HID"
-patch_bluez "Class"           "0x002540"   # Peripheral | Keyboard | Pointing
-patch_bluez "ControllerMode"  "bredr"      # Classic (not LE for now)
+patch_bluez Name           "Pi-HID"
+patch_bluez Class          "0x002540"   # Peripheral+KB/Mouse
+patch_bluez ControllerMode "bredr"
+patch_bluez DiscoverableTimeout 0
 
-# Ensure bluetoothd loads 'input' profile
-sudo sed -i \
-  's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
+# bluetoothd with input plugin
+sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
   /lib/systemd/system/bluetooth.service
 sudo systemctl daemon-reload
-sudo systemctl restart  bluetooth.service
+sudo rfkill unblock bluetooth
+sudo systemctl restart bluetooth.service
 
-echo "=== 3. Auto-pairing /discoverable agent (bt-agent.service) ==="
-sudo tee /etc/systemd/system/bt-agent.service >/dev/null <<'UNIT'
-[Unit]
-Description=Simple Bluetooth agent (NoInputNoOutput, always discoverable)
-After=bluetooth.service
-Requires=bluetooth.service
-
-[Service]
-Type=exec
-ExecStart=/usr/bin/bluetoothctl --timeout=0 <<'BTC'
+### 3  one‑shot bt_init.sh
+sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
+#!/bin/bash
+bluetoothctl <<EOF
 power on
-discoverable on
 pairable on
+discoverable on
 agent NoInputNoOutput
 default-agent
 system-alias Pi-HID
 quit
-BTC
+EOF
+SH
+sudo chmod +x /usr/local/sbin/bt_init.sh
+
+sudo tee /etc/systemd/system/bt-agent.service >/dev/null <<'UNIT'
+[Unit]
+Description=Bluetooth one-shot init (Pi-HID)
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bt_init.sh
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-sudo systemctl enable bt-agent.service
-sudo systemctl start  bt-agent.service
+sudo systemctl enable --now bt-agent.service
 
-echo "=== 4. udev rule + module for /dev/uinput ==="
+### 4  uinput access
 echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-uinput.rules
-echo "uinput" | sudo tee -a /etc/modules >/dev/null
+sudo udevadm control --reload-rules
 sudo modprobe uinput
+sudo udevadm trigger -v /dev/uinput || true
 
-echo "=== 5. Drop TCP→uinput Bluetooth HID bridge ==="
+### 5  Python venv + bridge
+mkdir -p ~/iControl
+python3 -m venv ~/iControl/venv
+source ~/iControl/venv/bin/activate
+pip install --upgrade pip
+pip install openai python-dotenv opencv-python evdev dbus-next
+
+# TCP→uinput bridge (fixed syntax)
 sudo tee /usr/local/bin/bt_hid_bridge.py >/dev/null <<'PY'
 #!/usr/bin/env python3
 import socket,time
 from evdev import UInput, ecodes as e
-
-ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y],
-             e.EV_KEY:list(e.keys.values())}, name="Pi-HID")
+ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y], e.EV_KEY:list(e.keys.values())}, name="Pi-HID")
 
 def tap(x,y):
     ui.write(e.EV_REL,e.REL_X,int((x-0.5)*200))
-    ui.write(e.EV_REL,e.REL_Y=int((y-0.5)*200))
+    ui.write(e.EV_REL,e.REL_Y,int((y-0.5)*200))
     ui.write(e.EV_KEY,e.BTN_LEFT,1); ui.syn(); time.sleep(0.05)
     ui.write(e.EV_KEY,e.BTN_LEFT,0); ui.syn()
 
@@ -86,57 +99,50 @@ def swipe(dx,dy):
         ui.write(e.EV_REL,e.REL_X,int(dx*10))
         ui.write(e.EV_REL,e.REL_Y,int(dy*10)); ui.syn(); time.sleep(0.02)
 
-KEYMAP={**{c:getattr(e,f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
-        **{str(i):getattr(e,f"KEY_{i}") for i in range(10)},
-        ' ':e.KEY_SPACE,'\n':e.KEY_ENTER,',':e.KEY_COMMA,'.':e.KEY_DOT,'-':e.KEY_MINUS}
+KEY={**{c:getattr(e,f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+     **{str(i):getattr(e,f"KEY_{i}") for i in range(10)},
+     ' ':e.KEY_SPACE,'\n':e.KEY_ENTER,',':e.KEY_COMMA,'.':e.KEY_DOT,'-':e.KEY_MINUS}
 
-def type_text(txt):
-    for ch in txt:
-        kc=KEYMAP.get(ch.upper())
-        if kc: ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
+def type_text(t):
+    for ch in t:
+        kc=KEY.get(ch.upper());
+        if kc:
+            ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
 
-sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-sock.bind(("127.0.0.1",5555)); sock.listen(1)
-print("bt_hid_bridge: waiting on 127.0.0.1:5555")
+s=socket.socket(); s.bind(("127.0.0.1",5555)); s.listen(1)
+print("bt_hid_bridge listening on 127.0.0.1:5555")
 while True:
-    conn,_=sock.accept()
-    with conn:
-        for line in conn.makefile():
-            cmds=line.strip().split(' ',2)
-            if not cmds: continue
+    c,_=s.accept();
+    with c,c.makefile() as f:
+        for l in f:
+            cmd,*a=l.strip().split(' ',2)
             try:
-                if cmds[0]=="TAP":   tap(float(cmds[1]),float(cmds[2]))
-                elif cmds[0]=="SWIPE": swipe(float(cmds[1]),float(cmds[2]))
-                elif cmds[0]=="TYPE": type_text(cmds[1] if len(cmds)>1 else "")
-            except Exception as err:
-                print("bad cmd",line,err)
+                if cmd=="TAP":   tap(float(a[0]),float(a[1]))
+                elif cmd=="SWIPE": swipe(float(a[0]),float(a[1]))
+                elif cmd=="TYPE": type_text(a[0] if a else "")
+            except Exception as ex:
+                print("bad",l.strip(),ex)
 PY
 sudo chmod +x /usr/local/bin/bt_hid_bridge.py
 
-echo "=== 6. systemd unit for HID bridge ==="
-sudo tee /etc/systemd/system/pi-bthid.service >/dev/null <<'UNIT'
+### 6  systemd unit (uses venv python)
+VENVPY=/home/aollman/iControl/venv/bin/python3
+sudo tee /etc/systemd/system/pi-bthid.service >/dev/null <<UNIT
 [Unit]
 Description=Pi Bluetooth HID Bridge (TCP→uinput)
 After=bluetooth.service bt-agent.service
 Requires=bluetooth.service
 
 [Service]
-ExecStart=/usr/local/bin/bt_hid_bridge.py
+ExecStart=${VENVPY} /usr/local/bin/bt_hid_bridge.py
+Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-sudo systemctl enable pi-bthid.service
-sudo systemctl start  pi-bthid.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-bthid.service
 
-echo "=== 7. Python venv for vision agent ==="
-mkdir -p ~/iControl
-python3 -m venv ~/iControl/venv
-source ~/iControl/venv/bin/activate
-pip install --upgrade pip
-pip install openai python-dotenv opencv-python
-
-echo "=== ✔  Setup complete — rebooting in 5 s ==="
-sleep 5
-sudo reboot
+### done
+echo "✔ Setup complete — rebooting in 5 s"; sleep 5; sudo reboot
