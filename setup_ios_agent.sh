@@ -88,8 +88,7 @@ import socket, time
 from evdev import UInput, ecodes as e
 
 ui = UInput({e.EV_REL: [e.REL_X, e.REL_Y],
-             e.EV_KEY: list(e.keys.values())},
-            name="Pi-HID")
+             e.EV_KEY: list(e.keys.values())}, name="Pi-HID")
 
 # ── basic actions ──
 
@@ -113,11 +112,10 @@ KEY = {**{c: getattr(e, f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ
 
 def type_text(txt: str):
     for ch in txt:
-        kc = KEY.get(ch.upper())
+        kc = KEY.get(ch)
         if kc:
             ui.write(e.EV_KEY, kc, 1); ui.syn()
-            ui.write(e.EV_KEY, kc, 0); ui.syn()
-            time.sleep(0.03)
+            ui.write(e.EV_KEY, kc, 0); ui.syn(); time.sleep(0.03)
 
 # ── socket listener ──
 
