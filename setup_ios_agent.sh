@@ -21,7 +21,7 @@ patch(){
 }
 patch Name Pi-HID
 patch Class 0x002580                  # mouse‑only HID → no PIN dialog
-patch ControllerMode bredr
+patch ControllerMode dual
 patch DiscoverableTimeout 0
 
 # ExecStart: input plugin *enabled*, sap disabled
