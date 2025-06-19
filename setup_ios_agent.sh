@@ -21,7 +21,7 @@ patch(){
 }
 patch Name Pi-HID
 patch Class 0x002580                  # mouse‑only HID → no PIN dialog
-patch ControllerMode dual
+patch ControllerMode dual      # allow BR/EDR + LE
 patch DiscoverableTimeout 0
 
 # ExecStart: input plugin *enabled*, sap disabled
@@ -161,8 +161,8 @@ After=bluetooth.target systemd-udev-settle.service
 Requires=bluetooth.target
 
 [Service]
-ExecStartPre=/usr/bin/modprobe hidp
-ExecStartPre=/usr/bin/modprobe uhid
+ExecStartPre=/sbin/modprobe hidp
+ExecStartPre=/sbin/modprobe uhid
 ExecStart=${VENVPY} /usr/local/bin/bt_hid_bridge.py
 Restart=on-failure
 
