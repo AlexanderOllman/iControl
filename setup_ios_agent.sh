@@ -23,8 +23,16 @@ patch Name Pi-HID
 patch Class 0x002540
 patch ControllerMode bredr
 patch DiscoverableTimeout 0
-sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
+# replace the entire ExecStart line and strip any stray --noplugin=input
+sudo sed -i \
+  -e 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
+  -e 's| --noplugin=input||g' \
   /lib/systemd/system/bluetooth.service
+
+# load kernel Classic‑HID helpers and persist across boots
+sudo modprobe hidp uhid
+for mod in hidp uhid; do grep -qxF "$mod" /etc/modules || echo "$mod" | sudo tee -a /etc/modules; done
+
 sudo systemctl daemon-reload
 sudo rfkill unblock bluetooth
 sudo systemctl restart bluetooth

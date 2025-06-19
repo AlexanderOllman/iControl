@@ -6,7 +6,7 @@
 # Bluetooth HID Keyboard and Mouse Emulator.
 #
 # It performs the following actions:
-# 1. Installs necessary system dependencies, including python3-venv.
+# 1. Installs necessary system dependencies, including build tools.
 # 2. Configures the BlueZ service to allow HID emulation.
 # 3. Creates a Python virtual environment (venv).
 # 4. Installs Python packages into the venv.
@@ -37,7 +37,8 @@ echo "--- Starting Raspberry Pi 5 Bluetooth HID Combo Setup ---"
 # --- Step 1: Update System and Install System Dependencies ---
 echo "[1/6] Updating system and installing dependencies..."
 apt-get update > /dev/null
-apt-get install -y python3-dbus python3-gi libbluetooth-dev python3-venv
+# Add build dependencies for PyGObject and its dependency, pycairo
+apt-get install -y python3-dbus python3-gi libbluetooth-dev python3-venv libcairo2-dev libgirepository1.0-dev pkg-config
 
 echo "System dependencies installed successfully."
 
@@ -75,7 +76,8 @@ fi
 
 echo "Installing Python packages (PyGObject, dbus-python) into the venv..."
 # Install packages using the venv's pip
-"${VENV_PATH}/bin/pip" install PyGObject dbus-python
+# We need to run this as the user to avoid permission issues inside the venv
+sudo -u "${SUDO_USER:-pi}" "${VENV_PATH}/bin/pip" install PyGObject dbus-python
 echo "Python packages installed."
 
 # --- Step 5: Create the Python Emulator Script ---
