@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pi‑5 Bluetooth‑HID + UVC capture one‑shot installer (Bookworm 64‑bit)
-# 2025‑06‑19  – v4  (syntactically clean)
+# 2025‑06‑19  – v6: ensure SDP HID record via sdptool add HID
 set -euo pipefail
 sudo -v
 
@@ -20,16 +20,16 @@ patch(){
     echo "$k = $v" | sudo tee -a "$CFG" >/dev/null
 }
 patch Name Pi-HID
-patch Class 0x002580
+patch Class 0x002580                  # mouse‑only HID → no PIN dialog
 patch ControllerMode bredr
 patch DiscoverableTimeout 0
-# replace the entire ExecStart line and strip any stray --noplugin=input
-sudo sed -i \
-  -e 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
-  -e 's| --noplugin=input||g' \
+
+# ExecStart: input plugin *enabled*, sap disabled
+sudo sed -i -e 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
+           -e 's| --noplugin=input||g' \
   /lib/systemd/system/bluetooth.service
 
-# load kernel Classic‑HID helpers and persist across boots
+############################ 2.1  Kernel hidp/uhid (persist) ###########
 sudo modprobe hidp uhid
 for mod in hidp uhid; do grep -qxF "$mod" /etc/modules || echo "$mod" | sudo tee -a /etc/modules; done
 
@@ -37,10 +37,14 @@ sudo systemctl daemon-reload
 sudo rfkill unblock bluetooth
 sudo systemctl restart bluetooth
 
+# force‑register SDP HID record (BlueZ sometimes drops it)
+sudo sdptool add HID || true
+
 ############################ 3  bt_init.sh ###############################
 sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
 #!/bin/bash
 set -e
+# wait until controller appears
 for _ in {1..10}; do hciconfig hci0 >/dev/null 2>&1 && break; sleep 1; done
 bluetoothctl <<EOF
 power on
@@ -88,7 +92,7 @@ deactivate
 ############################ 6  Bridge script ############################
 sudo tee /usr/local/bin/bt_hid_bridge.py >/dev/null <<'PY'
 #!/usr/bin/env python3
-"""TCP(5555) -> uinput Bluetooth HID bridge."""
+"""TCP(5555) → uinput Bluetooth HID bridge (mouse + basic keys)."""
 import os, socket, time
 from evdev import UInput, ecodes as e
 
@@ -98,58 +102,46 @@ try:
 except PermissionError:
     pass
 
-BASE_KEYS = [
-    e.BTN_LEFT,
-    *range(e.KEY_A, e.KEY_Z + 1),
-    *range(e.KEY_0, e.KEY_9 + 1),
-    e.KEY_SPACE, e.KEY_ENTER, e.KEY_COMMA, e.KEY_DOT, e.KEY_MINUS,
-]
+BASE_KEYS=[e.BTN_LEFT,*range(e.KEY_A,e.KEY_Z+1),*range(e.KEY_0,e.KEY_9+1),
+           e.KEY_SPACE,e.KEY_ENTER,e.KEY_COMMA,e.KEY_DOT,e.KEY_MINUS]
+ui=UInput({e.EV_REL:[e.REL_X,e.REL_Y],e.EV_KEY:BASE_KEYS},name='Pi-HID')
 
-ui = UInput({e.EV_REL: [e.REL_X, e.REL_Y],
-             e.EV_KEY: BASE_KEYS}, name='Pi-HID')
+def tap(x,y):
+    ui.write(e.EV_REL,e.REL_X,int((x-0.5)*200))
+    ui.write(e.EV_REL,e.REL_Y,int((y-0.5)*200))
+    ui.write(e.EV_KEY,e.BTN_LEFT,1); ui.syn(); time.sleep(0.05)
+    ui.write(e.EV_KEY,e.BTN_LEFT,0); ui.syn()
 
-def tap(x, y):
-    ui.write(e.EV_REL, e.REL_X, int((x - 0.5) * 200))
-    ui.write(e.EV_REL, e.REL_Y, int((y - 0.5) * 200))
-    ui.write(e.EV_KEY, e.BTN_LEFT, 1); ui.syn(); time.sleep(0.05)
-    ui.write(e.EV_KEY, e.BTN_LEFT, 0); ui.syn()
-
-def swipe(dx, dy):
+def swipe(dx,dy):
     for _ in range(15):
-        ui.write(e.EV_REL, e.REL_X, int(dx * 10))
-        ui.write(e.EV_REL, e.REL_Y, int(dy * 10))
-        ui.syn(); time.sleep(0.02)
+        ui.write(e.EV_REL,e.REL_X,int(dx*10))
+        ui.write(e.EV_REL,e.REL_Y,int(dy*10)); ui.syn(); time.sleep(0.02)
 
-KEY = { **{c: getattr(e, f'KEY_{c.upper()}') for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'},
-        **{str(i): getattr(e, f'KEY_{i}') for i in range(10)},
-        ' ': e.KEY_SPACE, '\n': e.KEY_ENTER, ',': e.KEY_COMMA,
-        '.': e.KEY_DOT, '-': e.KEY_MINUS }
+KEY={**{c:getattr(e,f'KEY_{c.upper()}') for c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'},
+     **{str(i):getattr(e,f'KEY_{i}') for i in range(10)},
+     ' ':e.KEY_SPACE,'\n':e.KEY_ENTER,',':e.KEY_COMMA,'.':e.KEY_DOT,'-':e.KEY_MINUS}
 
-def type_text(txt: str):
-    for ch in txt:
-        kc = KEY.get(ch)
+def type_text(t:str):
+    for ch in t:
+        kc=KEY.get(ch);
         if kc:
-            ui.write(e.EV_KEY, kc, 1); ui.syn()
-            ui.write(e.EV_KEY, kc, 0); ui.syn(); time.sleep(0.03)
+            ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
 
 def main():
-    sock = socket.socket(); sock.bind(('127.0.0.1', 5555)); sock.listen(1)
+    s=socket.socket(); s.bind(('127.0.0.1',5555)); s.listen(1)
     print('bt_hid_bridge listening on 127.0.0.1:5555')
     while True:
-        conn, _ = sock.accept()
-        with conn, conn.makefile() as f:
-            for line in f:
-                cmd, *args = line.strip().split(' ', 2)
+        c,_=s.accept();
+        with c,c.makefile() as f:
+            for l in f:
+                cmd,*a=l.strip().split(' ',2)
                 try:
-                    if cmd == 'TAP':
-                        tap(float(args[0]), float(args[1]))
-                    elif cmd == 'SWIPE':
-                        swipe(float(args[0]), float(args[1]))
-                    elif cmd == 'TYPE':
-                        type_text(args[0] if args else '')
+                    if cmd=='TAP': tap(float(a[0]),float(a[1]))
+                    elif cmd=='SWIPE': swipe(float(a[0]),float(a[1]))
+                    elif cmd=='TYPE': type_text(a[0] if a else '')
                 except Exception as ex:
-                    print('bad cmd', line.strip(), ex)
-if __name__ == '__main__':
+                    print('bad cmd',l.strip(),ex)
+if __name__=='__main__':
     main()
 PY
 sudo chmod +x /usr/local/bin/bt_hid_bridge.py
@@ -163,6 +155,8 @@ After=bluetooth.target systemd-udev-settle.service
 Requires=bluetooth.target
 
 [Service]
+ExecStartPre=/usr/bin/modprobe hidp
+ExecStartPre=/usr/bin/modprobe uhid
 ExecStart=${VENVPY} /usr/local/bin/bt_hid_bridge.py
 Restart=on-failure
 
