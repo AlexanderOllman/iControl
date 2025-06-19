@@ -79,7 +79,8 @@ Restart=on-failure
 WantedBy=multi-user.target
 UNIT
 
-sudo systemctl enable --now uhid-mouse.service
+# enable after venv ready
+sudo systemctl enable uhid-mouse.service
 
 ################################ 4  bt_init.sh – BLE advertise ###############
 sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
@@ -124,14 +125,7 @@ echo 'KERNEL=="uinput", MODE="0666"' | sudo tee /etc/udev/rules.d/99-uinput.rule
 sudo modprobe uinput
 sudo udevadm trigger /dev/uinput || true
 
-################################ 6  Python venv ###############################
-mkdir -p ~/iControl
-python3 -m venv ~/iControl/venv
-source ~/iControl/venv/bin/activate
-pip install -q --upgrade pip
-pip install -q evdev uhid
 
-deactivate
 
 ################################ 7  Bridge script (unchanged) #################
 # Assumes /usr/local/bin/bt_hid_bridge.py already present from previous runs.
