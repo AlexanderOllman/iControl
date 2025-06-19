@@ -37,7 +37,8 @@ set_bluez "Class"          "0x002540"      # Peripheral / Keyboard / Pointing
 set_bluez "ControllerMode" "bredr"         # enable Classic for HID
 
 # ensure bluetoothd loads the input profile
-sudo sed -i 's|^ExecStart=.*|ExecStart=/usr/lib/bluetooth/bluetoothd --noplugin=sap -P input|' \
+sudo sed -i \
+  's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --noplugin=sap -P input|' \
   /lib/systemd/system/bluetooth.service
 
 sudo systemctl daemon-reload
