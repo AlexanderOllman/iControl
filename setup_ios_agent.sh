@@ -30,15 +30,14 @@ sudo sed -i -e 's|^ExecStart=.*|ExecStart=/usr/libexec/bluetooth/bluetoothd --no
   /lib/systemd/system/bluetooth.service
 
 ############################ 2.1  Kernel hidp/uhid (persist) ###########
-sudo modprobe hidp uhid
-for mod in hidp uhid; do grep -qxF "$mod" /etc/modules || echo "$mod" | sudo tee -a /etc/modules; done
+sudo modprobe uhid
+grep -qxF "uhid" /etc/modules || echo "uhid" | sudo tee -a /etc/modules >/dev/null
 
 sudo systemctl daemon-reload
 sudo rfkill unblock bluetooth
 sudo systemctl restart bluetooth
 
-# force‑register SDP HID record (BlueZ sometimes drops it)
-sudo sdptool add HID || true
+
 
 ############################ 3  bt_init.sh ###############################
 sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
@@ -161,7 +160,6 @@ After=bluetooth.target systemd-udev-settle.service
 Requires=bluetooth.target
 
 [Service]
-ExecStartPre=/sbin/modprobe hidp
 ExecStartPre=/sbin/modprobe uhid
 ExecStart=${VENVPY} /usr/local/bin/bt_hid_bridge.py
 Restart=on-failure
