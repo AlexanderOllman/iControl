@@ -52,6 +52,12 @@ pairable on
 discoverable on
 agent NoInputNoOutput
 default-agent
+# ── BLE HID advertising (mouse) ──
+menu advertise
+appearance 962                              # Generic Mouse
+uuids 00001812-0000-1000-8000-00805f9b34fb   # HID Service
+back
+advertise on                                # start LE advertising
 system-alias Pi-HID
 quit
 EOF
