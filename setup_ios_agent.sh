@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pi‑5 Classic‑Bluetooth HID (keyboard+mouse) with AUTO‑PIN entry
-# Bookworm 64‑bit – vA (2025‑06‑19)
+# Bookworm 64‑bit – vA2 (2025‑06‑19)
 # ‑ Installs deps, enables BR/EDR keyboard+mouse SDP record
 # ‑ Starts bt_autokey.py that receives the 6‑digit pass‑key from BlueZ and
 #   types it via /dev/uinput so iOS pairing succeeds automatically.
@@ -9,8 +9,10 @@ sudo -v
 
 ################################ 1  Packages #################################
 sudo apt update
-sudo apt install -y python3-venv python3-pip python3-dbus python3-evdev \
-  bluez bluez-tools libbluetooth-dev git
+sudo apt install -y \
+  python3-venv python3-pip python3-dev build-essential \
+  python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0 \
+  python3-evdev bluez bluez-tools libbluetooth-dev git
 
 ################################ 2  BlueZ ####################################
 CFG=/etc/bluetooth/main.conf
@@ -78,7 +80,7 @@ mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install -q --upgrade pip
-pip install -q evdev dbus-python gi
+pip install -q evdev            # dbus & gi come from system packages
 
 deactivate
 
@@ -143,7 +145,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now bt-autokey.service
 
 ################################ 7  Bridge script #############################
-# (unchanged; still at /usr/local/bin/bt_hid_bridge.py)
+# (existing /usr/local/bin/bt_hid_bridge.py works)
 
 ################################ 8  Service ###################################
 VENVPY=/home/aollman/iControl/venv/bin/python3
