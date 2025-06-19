@@ -7,6 +7,8 @@
 set -euo pipefail
 sudo -v
 
+VENVPY=/home/aollman/iControl/venv/bin/python3
+
 ################################ 1  Packages #################################
 sudo apt update
 sudo apt install -y \
@@ -68,7 +70,7 @@ sudo chmod +x /usr/local/bin/uhid_mouse.py
 
 sudo tee /etc/systemd/system/uhid-mouse.service >/dev/null <<UNIT
 [Unit]
-Description=User‑space UHID Mouse (BLE‑HID backend)
+Description=User-space UHID Mouse (BLE-HID backend)
 After=systemd-udev-settle.service
 
 [Service]
@@ -77,19 +79,9 @@ Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
-UNIT'
-[Unit]
-Description=User‑space UHID Mouse (BLE‑HID backend)
-After=systemd-udev-settle.service
-
-[Service]
-ExecStart=/usr/local/bin/uhid_mouse.py
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
+sudo systemctl enable --now uhid-mouse.service
 sudo systemctl enable --now uhid-mouse.service
 
 ################################ 4  bt_init.sh – BLE advertise ###############
