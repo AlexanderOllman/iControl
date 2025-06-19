@@ -84,44 +84,59 @@ pip install openai python-dotenv opencv-python evdev dbus-next
 # TCP→uinput bridge (fixed syntax)
 sudo tee /usr/local/bin/bt_hid_bridge.py >/dev/null <<'PY'
 #!/usr/bin/env python3
-import socket,time
+import socket, time
 from evdev import UInput, ecodes as e
-ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y], e.EV_KEY:list(e.keys.values())}, name="Pi-HID")
 
-def tap(x,y):
-    ui.write(e.EV_REL,e.REL_X,int((x-0.5)*200))
-    ui.write(e.EV_REL,e.REL_Y,int((y-0.5)*200))
-    ui.write(e.EV_KEY,e.BTN_LEFT,1); ui.syn(); time.sleep(0.05)
-    ui.write(e.EV_KEY,e.BTN_LEFT,0); ui.syn()
+ui = UInput({e.EV_REL: [e.REL_X, e.REL_Y],
+             e.EV_KEY: list(e.keys.values())},
+            name="Pi-HID")
 
-def swipe(dx,dy):
+# ── basic actions ──
+
+def tap(x: float, y: float):
+    ui.write(e.EV_REL, e.REL_X, int((x - 0.5) * 200))
+    ui.write(e.EV_REL, e.REL_Y, int((y - 0.5) * 200))
+    ui.write(e.EV_KEY, e.BTN_LEFT, 1); ui.syn(); time.sleep(0.05)
+    ui.write(e.EV_KEY, e.BTN_LEFT, 0); ui.syn()
+
+def swipe(dx: float, dy: float):
     for _ in range(15):
-        ui.write(e.EV_REL,e.REL_X,int(dx*10))
-        ui.write(e.EV_REL,e.REL_Y,int(dy*10)); ui.syn(); time.sleep(0.02)
+        ui.write(e.EV_REL, e.REL_X, int(dx * 10))
+        ui.write(e.EV_REL, e.REL_Y, int(dy * 10))
+        ui.syn(); time.sleep(0.02)
 
-KEY={**{c:getattr(e,f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
-     **{str(i):getattr(e,f"KEY_{i}") for i in range(10)},
-     ' ':e.KEY_SPACE,'\n':e.KEY_ENTER,',':e.KEY_COMMA,'.':e.KEY_DOT,'-':e.KEY_MINUS}
+KEY = {**{c: getattr(e, f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
+       **{str(i): getattr(e, f"KEY_{i}") for i in range(10)},
+       ' ': e.KEY_SPACE, '
+': e.KEY_ENTER,
+       ',': e.KEY_COMMA, '.': e.KEY_DOT, '-': e.KEY_MINUS}
 
-def type_text(t):
-    for ch in t:
-        kc=KEY.get(ch.upper());
+def type_text(txt: str):
+    for ch in txt:
+        kc = KEY.get(ch.upper())
         if kc:
-            ui.write(e.EV_KEY,kc,1); ui.syn(); ui.write(e.EV_KEY,kc,0); ui.syn(); time.sleep(0.03)
+            ui.write(e.EV_KEY, kc, 1); ui.syn()
+            ui.write(e.EV_KEY, kc, 0); ui.syn()
+            time.sleep(0.03)
 
-s=socket.socket(); s.bind(("127.0.0.1",5555)); s.listen(1)
+# ── socket listener ──
+
+sock = socket.socket(); sock.bind(("127.0.0.1", 5555)); sock.listen(1)
 print("bt_hid_bridge listening on 127.0.0.1:5555")
 while True:
-    c,_=s.accept();
-    with c,c.makefile() as f:
-        for l in f:
-            cmd,*a=l.strip().split(' ',2)
+    conn, _ = sock.accept()
+    with conn, conn.makefile() as f:
+        for line in f:
+            cmd, *args = line.strip().split(' ', 2)
             try:
-                if cmd=="TAP":   tap(float(a[0]),float(a[1]))
-                elif cmd=="SWIPE": swipe(float(a[0]),float(a[1]))
-                elif cmd=="TYPE": type_text(a[0] if a else "")
+                if cmd == "TAP":
+                    tap(float(args[0]), float(args[1]))
+                elif cmd == "SWIPE":
+                    swipe(float(args[0]), float(args[1]))
+                elif cmd == "TYPE":
+                    type_text(args[0] if args else "")
             except Exception as ex:
-                print("bad",l.strip(),ex)
+                print("bad cmd", line.strip(), ex)
 PY
 sudo chmod +x /usr/local/bin/bt_hid_bridge.py
 
