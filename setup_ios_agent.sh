@@ -66,7 +66,18 @@ except KeyboardInterrupt:
 PY
 sudo chmod +x /usr/local/bin/uhid_mouse.py
 
-sudo tee /etc/systemd/system/uhid-mouse.service >/dev/null <<'UNIT'
+sudo tee /etc/systemd/system/uhid-mouse.service >/dev/null <<UNIT
+[Unit]
+Description=User‑space UHID Mouse (BLE‑HID backend)
+After=systemd-udev-settle.service
+
+[Service]
+ExecStart=${VENVPY} /usr/local/bin/uhid_mouse.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT'
 [Unit]
 Description=User‑space UHID Mouse (BLE‑HID backend)
 After=systemd-udev-settle.service
@@ -129,7 +140,7 @@ mkdir -p ~/iControl
 python3 -m venv ~/iControl/venv
 source ~/iControl/venv/bin/activate
 pip install -q --upgrade pip
-pip install -q evdev
+pip install -q evdev uhid
 
 deactivate
 
