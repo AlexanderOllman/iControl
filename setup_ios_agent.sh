@@ -92,7 +92,15 @@ try:
     os.chmod('/dev/uinput',0o666)
 except PermissionError:
     pass
-ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y], e.EV_KEY:list(e.keys.values())}, name='Pi-HID')
+# valid keycodes for keyboard + mouse
+BASE_KEYS=(
+  [ e.BTN_LEFT ]
+  + list(range(e.KEY_A, e.KEY_Z+1))
+  + list(range(e.KEY_0, e.KEY_9+1))
+  + [e.KEY_SPACE, e.KEY_ENTER, e.KEY_COMMA, e.KEY_DOT, e.KEY_MINUS]
+)
+ui = UInput({e.EV_REL:[e.REL_X,e.REL_Y],
+             e.EV_KEY: BASE_KEYS}, name='Pi-HID')
 
 def tap(x,y):
     ui.write(e.EV_REL,e.REL_X,int((x-0.5)*200))
