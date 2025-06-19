@@ -93,9 +93,13 @@ try:
 except PermissionError:
     pass
 # valid keycodes for keyboard + mouse
-BASE_KEYS=(
-  [ e.BTN_LEFT ]
-  + list(range(e.KEY_A, e.KEY_Z+1))
+# valid keycodes for keyboard + mouse
+BASE_KEYS=[
+  e.BTN_LEFT,
+  *range(e.KEY_A, e.KEY_Z + 1),   # A–Z
+  *range(e.KEY_0, e.KEY_9 + 1),   # 0–9
+  e.KEY_SPACE, e.KEY_ENTER, e.KEY_COMMA, e.KEY_DOT, e.KEY_MINUS
+])
   + list(range(e.KEY_0, e.KEY_9+1))
   + [e.KEY_SPACE, e.KEY_ENTER, e.KEY_COMMA, e.KEY_DOT, e.KEY_MINUS]
 )
