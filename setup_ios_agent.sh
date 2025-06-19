@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pi‑5 **BLE‑HID (mouse+basic keys) bridge** for iOS – vB1  (2025‑06‑19)
-# - Advertises BLE "Generic Mouse" with HID over GATT (HOGP).
+# - Advertises BLE “Generic Mouse” with HID over GATT (HOGP).
 # - Creates a userspace UHID device so BlueZ exposes the HID service.
 # - GPT actions are sent over TCP → /dev/uinput (same bridge as before).
 #   iPhone pairs with **NO PIN**.
@@ -57,7 +57,8 @@ RD = bytes([
  0x05,0x01,0x09,0x30,0x09,0x31,0x15,0x81,0x25,0x7F,
  0x75,0x08,0x95,0x02,0x81,0x06,0xC0,0xC0])
 
-dev = uhid.UHIDDevice(name='Pi-HID', report_descriptor=RD)
+# name, vendor_id, product_id, version, country, report_desc
+dev = uhid.UHIDDevice('Pi-HID', 0x1d6b, 0x0104, 0x0001, 0, RD)
 print('UHID mouse created'); dev.create();
 try:
     while True: time.sleep(3600)
@@ -80,7 +81,7 @@ WantedBy=multi-user.target
 UNIT
 
 # enable after venv ready
-sudo systemctl enable uhid-mouse.service
+sudo systemctl enable --now uhid-mouse.service
 
 ################################ 4  bt_init.sh – BLE advertise ###############
 sudo tee /usr/local/sbin/bt_init.sh >/dev/null <<'SH'
