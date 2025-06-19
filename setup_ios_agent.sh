@@ -22,9 +22,12 @@ sudo apt install -y \
 ### 2  BlueZ main.conf tweaks
 CFG=/etc/bluetooth/main.conf
 patch_bluez(){
-  local k="$1" v="$2"; grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$CFG" && \
-    sudo sed -i "s|^[#[:space:]]*${k}[[:space:]]*=.*|${k} = ${v}|" "$CFG" || \
-    echo "${k} = ${v}" | sudo tee -a "$CFG" >/dev/null;
+  local k="$1" v="$2"
+  if grep -qE "^[#[:space:]]*${k}[[:space:]]*=" "$CFG"; then
+    sudo sed -i "s|^[#[:space:]]*${k}[[:space:]]*=.*|${k} = ${v}|" "$CFG"
+  else
+    echo "${k} = ${v}" | sudo tee -a "$CFG" >/dev/null
+  fi
 }
 patch_bluez Name           "Pi-HID"
 patch_bluez Class          "0x002540"   # Peripheral+KB/Mouse
@@ -66,6 +69,7 @@ ExecStart=/usr/local/sbin/bt_init.sh
 [Install]
 WantedBy=multi-user.target
 UNIT
+sudo systemctl daemon-reload
 sudo systemctl enable --now bt-agent.service
 
 ### 4  uinput access
@@ -106,8 +110,7 @@ def swipe(dx: float, dy: float):
 
 KEY = {**{c: getattr(e, f"KEY_{c.upper()}") for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
        **{str(i): getattr(e, f"KEY_{i}") for i in range(10)},
-       ' ': e.KEY_SPACE, '
-': e.KEY_ENTER,
+       ' ': e.KEY_SPACE, '\n': e.KEY_ENTER,
        ',': e.KEY_COMMA, '.': e.KEY_DOT, '-': e.KEY_MINUS}
 
 def type_text(txt: str):
@@ -119,7 +122,9 @@ def type_text(txt: str):
 
 # ── socket listener ──
 
-sock = socket.socket(); sock.bind(("127.0.0.1", 5555)); sock.listen(1)
+sock = socket.socket()
+sock.bind(("127.0.0.1", 5555))
+sock.listen(1)
 print("bt_hid_bridge listening on 127.0.0.1:5555")
 while True:
     conn, _ = sock.accept()
