@@ -12,7 +12,7 @@ VENVPY=/home/aollman/iControl/venv/bin/python3
 ################################ 1  Packages #################################
 sudo apt update
 sudo apt install -y \
-  python3-venv python3-pip python3-evdev \
+  python3-venv python3-pip python3-evdev build-essential libudev-dev \
   bluez bluez-tools libbluetooth-dev git \
   python3-dbus python3-gi python3-gi-cairo gir1.2-glib-2.0
 
