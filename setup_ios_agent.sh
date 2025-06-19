@@ -59,7 +59,8 @@ RD = bytes([
 
 # name, vendor_id, product_id, version, country, report_desc
 # name, vendor_id, product_id, report_desc (python‑uhid on Bookworm expects 4 args)
-dev = uhid.UHIDDevice('Pi-HID', 0x1d6b, 0x0104, RD)
+# python-uhid (Bookworm) signature: UHIDDevice(name, report_descriptor)
+dev = uhid.UHIDDevice('Pi-HID', RD)
 print('UHID mouse created'); dev.create();
 try:
     while True: time.sleep(3600)
