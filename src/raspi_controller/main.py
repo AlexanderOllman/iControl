@@ -146,11 +146,12 @@ class VisionController:
         image_part = types.Part.from_bytes(data=encoded_image.tobytes(), mime_type='image/jpeg')
 
         try:
+            config = types.GenerationConfig(response_mime_type="application/json")
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model='gemini-2.5-flash',
                 contents=[image_part, prompt],
-                generation_config=types.GenerationConfig(response_mime_type="application/json")
+                config=config
             )
             elements = json.loads(response.text)
             return elements
