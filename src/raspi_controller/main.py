@@ -4,7 +4,7 @@ import json
 import cv2
 import numpy as np
 from bleak import BleakClient, BleakScanner
-import google.generativeai as genai
+import google.genai as genai
 
 # --- Configuration ---
 # BLE settings for the ESP32-S3

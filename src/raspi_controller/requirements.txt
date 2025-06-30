@@ -1,4 +1,4 @@
 bleak
-google-generativeai
+google-genai
 opencv-python
 numpy 
