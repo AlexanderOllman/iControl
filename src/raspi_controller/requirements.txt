@@ -1,4 +1,5 @@
 bleak
 google-genai
 opencv-python
-numpy 
+numpy
+Pillow 

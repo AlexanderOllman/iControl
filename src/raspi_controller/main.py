@@ -4,7 +4,8 @@ import json
 import cv2
 import numpy as np
 from bleak import BleakClient, BleakScanner
-import google.genai as genai
+from google import genai
+from PIL import Image
 
 # --- Configuration ---
 # BLE settings for the ESP32-S3
@@ -14,10 +15,12 @@ CHARACTERISTIC_UUID = "c48e6068-5295-48d3-8d5c-0395f61792b1"
 
 # --- Gemini API Setup ---
 # IMPORTANT: Set your Gemini API key as an environment variable before running.
+# The google-generativeai library will automatically use it.
 # In your terminal, run:
 # export GEMINI_API_KEY='YOUR_API_KEY'
 try:
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    # This check ensures the script fails early if the key isn't set.
+    os.environ["GEMINI_API_KEY"]
 except KeyError:
     print("="*60)
     print("ERROR: GEMINI_API_KEY environment variable not set.")
@@ -87,7 +90,7 @@ class HIDController:
 class VisionController:
     """Captures video frames and uses Gemini to decide actions."""
     def __init__(self):
-        self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        self.client = genai.Client()
 
     async def capture_frame(self, device_index=0, filename="capture.jpg"):
         """Captures a single frame from the specified video device."""
@@ -133,11 +136,15 @@ class VisionController:
         User command: "{command}"
         """
         
-        # Convert the numpy array (frame) to a PIL Image for the SDK
-        pil_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Convert the numpy array (frame from cv2) to a PIL Image
+        rgb_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(rgb_frame)
         
         try:
-            response = await self.model.generate_content_async([prompt, pil_image])
+            response = await self.client.models.generate_content_async(
+                model='gemini-2.5-flash',
+                contents=[prompt, pil_image]
+            )
             
             # Clean up the response to extract only the JSON part
             cleaned_response = response.text.strip().replace("```json", "").replace("```", "").strip()
@@ -147,7 +154,7 @@ class VisionController:
             return action_plan
         except Exception as e:
             print(f"Error processing Gemini response: {e}")
-            print(f"Raw response was: {response.text}")
+            print(f"Raw response was: {getattr(e, 'response', '')}")
             return None
 
 async def main():
