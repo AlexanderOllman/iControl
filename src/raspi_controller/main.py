@@ -158,36 +158,6 @@ class VisionController:
             
         return cv2.boundingRect(largest_contour)
 
-    def _parse_json_from_response(self, text: str):
-        """
-        Finds and parses a JSON object from a string that might contain other text,
-        like the markdown ```json ... ``` markers.
-        """
-        # Find the start of the JSON block
-        json_start = text.find('[')
-        if json_start == -1:
-            # Fallback for single object JSON
-            json_start = text.find('{')
-            if json_start == -1:
-                return None
-
-        # Find the end of the JSON block
-        json_end = text.rfind(']')
-        if json_end == -1:
-            # Fallback for single object JSON
-            json_end = text.rfind('}')
-            if json_end == -1:
-                return None
-
-        json_str = text[json_start:json_end+1]
-        
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON: {e}")
-            print(f"Extracted string was: {json_str}")
-            return None
-
     def capture_frame(self, filename="capture.jpg"):
         """
         Captures a fresh frame from the open device by clearing the buffer.
@@ -222,7 +192,7 @@ class VisionController:
         2. "box_2d": The bounding box for the element as a list of four numbers [y_min, x_min, y_max, x_max] normalized to 1000.
 
         Do not identify the phone's status bar elements like time or battery. Focus on interactable application icons and widgets.
-        Respond with ONLY the JSON list. Do not use markdown.
+        Respond with ONLY the JSON list. Ensure the JSON is perfectly formatted, with commas between all elements except the last one.
         """
         
         success, encoded_image = cv2.imencode('.jpg', image)
@@ -244,7 +214,7 @@ class VisionController:
                 contents=[image_part, prompt],
                 config=config
             )
-            elements = self._parse_json_from_response(response.text)
+            elements = json.loads(response.text.strip().replace("```json", "").replace("```", "").strip())
             return elements
         except Exception as e:
             print(f"Error getting UI elements from Gemini: {e}")
