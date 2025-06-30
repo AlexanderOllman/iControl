@@ -130,26 +130,23 @@ class VisionController:
         Finds the bounding box of the actual screen within a letterboxed frame.
         Returns (x, y, w, h) of the screen area, or None if not found.
         """
-        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Threshold to get a binary image. This assumes the screen is brighter than the black bars.
-        _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+        # Use Otsu's binarization which automatically finds an optimal threshold
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if not contours:
             print("Warning: No contours found in image.")
             return None
 
-        # Find the largest contour by area
         largest_contour = max(contours, key=cv2.contourArea)
         
         frame_area = frame.shape[0] * frame.shape[1]
         contour_area = cv2.contourArea(largest_contour)
         
-        # Sanity check: ensure the found contour is a significant size
+        # If the contour is too small, it's probably noise. Return the whole frame.
         if contour_area < frame_area * min_area_ratio:
             print(f"Warning: Largest contour is only {contour_area / frame_area:.2%} of the frame. Assuming full frame.")
             return 0, 0, frame.shape[1], frame.shape[0]
@@ -158,17 +155,21 @@ class VisionController:
 
     def capture_frame(self, filename="capture.jpg"):
         """
-        Captures a single frame from the already open video device.
+        Captures a fresh frame from the open device by clearing the buffer.
         """
         if not self.cap or not self.cap.isOpened():
             print("Error: Capture device is not initialized.")
             return None
 
-        # The device is already open, so we just read a frame.
+        # Read and discard 5 frames to clear the buffer of any stale ones
+        for _ in range(5):
+            self.cap.read()
+
+        # Now, read the frame we actually want
         ret, frame = self.cap.read()
 
         if not ret:
-            print("Error: Could not read frame.")
+            print("Error: Could not read a fresh frame.")
             return None
 
         height, width, _ = frame.shape
