@@ -1,6 +1,6 @@
 import asyncio
 from bleak import BleakClient, BleakScanner
-from pynput import keyboard
+import readchar
 
 # --- Configuration ---
 DEVICE_NAME = "iControl HID"
@@ -14,7 +14,6 @@ class HIDTestController:
         self.client: BleakClient = None
         self.x = 0
         self.y = 0
-        self.loop = asyncio.get_running_loop()
 
     async def connect(self):
         print(f"Scanning for '{DEVICE_NAME}'...")
@@ -45,39 +44,26 @@ class HIDTestController:
         await self._send_command(f"m:{dx},{dy}")
         print(f"Moved by ({dx}, {dy}). New estimated position: ({self.x}, {self.y})", end='\r')
 
-def on_press(key):
-    """Callback for keyboard presses."""
-    try:
-        char = key.char
-        if char == 'w':
-            asyncio.run_coroutine_threadsafe(controller.move_relative(0, -MOVE_STEP), controller.loop)
-        elif char == 's':
-            asyncio.run_coroutine_threadsafe(controller.move_relative(0, MOVE_STEP), controller.loop)
-        elif char == 'a':
-            asyncio.run_coroutine_threadsafe(controller.move_relative(-MOVE_STEP, controller.loop), controller.loop)
-        elif char == 'd':
-            asyncio.run_coroutine_threadsafe(controller.move_relative(MOVE_STEP, 0), controller.loop)
-        elif char == 'q':
-            # Stop the listener
-            return False
-    except AttributeError:
-        pass # Ignore special keys
-
 async def main():
-    global controller
     controller = HIDTestController()
 
     if not await controller.connect():
         return
 
-    # Start keyboard listener in a separate thread
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
-
-    # Wait until the listener is stopped (by pressing 'q')
-    while listener.is_alive():
-        await asyncio.sleep(0.1)
-
+    while True:
+        key = readchar.readkey()
+        
+        if key == 'w':
+            await controller.move_relative(0, -MOVE_STEP)
+        elif key == 's':
+            await controller.move_relative(0, MOVE_STEP)
+        elif key == 'a':
+            await controller.move_relative(-MOVE_STEP, 0)
+        elif key == 'd':
+            await controller.move_relative(MOVE_STEP, 0)
+        elif key == 'q':
+            break
+    
     await controller.disconnect()
 
 if __name__ == "__main__":

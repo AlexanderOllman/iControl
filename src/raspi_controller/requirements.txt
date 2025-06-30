@@ -1,6 +1,6 @@
 bleak
-google-genai
+google-generativeai
 opencv-python
 numpy
 Pillow
-pynput 
+readchar 
