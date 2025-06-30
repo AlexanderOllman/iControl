@@ -135,8 +135,8 @@ class VisionController:
             print(f"Error: Could not open video device at index {device_index}.")
             return None
 
-        # Set format to Motion-JPEG
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        # Set format to YUYV (uncompressed) to bypass potential MJPG decoding issues
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V'))
         # Set the desired high resolution
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
