@@ -146,14 +146,18 @@ class VisionController:
         image_part = types.Part.from_bytes(data=encoded_image.tobytes(), mime_type='image/jpeg')
 
         try:
-            config = types.GenerationConfig(response_mime_type="application/json")
+            # The config object from the example. We are not forcing a mime type here,
+            # as the prompt is strong enough to ensure JSON output.
+            config = types.GenerateContentConfig(      
+                thinking_config=types.ThinkingConfig(thinking_budget=0)
+            ) 
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model='gemini-2.5-flash',
                 contents=[image_part, prompt],
                 config=config
             )
-            elements = json.loads(response.text)
+            elements = json.loads(response.text.strip().replace("```json", "").replace("```", "").strip())
             return elements
         except Exception as e:
             print(f"Error getting UI elements from Gemini: {e}")
