@@ -74,20 +74,25 @@ class HIDController:
         """Moves the mouse by a relative offset."""
         await self._send_command(f"m:{x},{y}")
 
-    async def click_at_position(self, x: int, y: int):
+    async def click_at_position(self, x: int, y: int, click=True):
         """
-        Moves to an absolute screen position and clicks.
+        Moves to an absolute screen position and optionally clicks.
         Uses a reset-to-origin trick for absolute positioning.
         """
-        print(f"  - Clicking at ({x}, {y})")
+        if click:
+            print(f"  - Clicking at ({x}, {y})")
+        else:
+            print(f"  - Moving to center at ({x}, {y})")
+
         # 1. Reset cursor to top-left (0,0) by moving a large negative distance
         await self.move_mouse_relative(-32767, -32767)
         await asyncio.sleep(0.05)
         # 2. Move to the absolute target coordinates
         await self.move_mouse_relative(x, y)
         await asyncio.sleep(0.05)
-        # 3. Perform the click
-        await self._send_command("mc:left")
+        # 3. Perform the click if requested
+        if click:
+            await self._send_command("mc:left")
 
 class VisionController:
     """Captures video frames and uses Gemini to decide actions."""
@@ -257,6 +262,18 @@ async def main():
     if not await hid.connect():
         vision.shutdown()
         return
+
+    # Initialize cursor position
+    print("\nInitializing cursor position...")
+    initial_frame = vision.capture_frame()
+    if initial_frame is not None:
+        bounds = vision.find_screen_bounds(initial_frame)
+        if bounds:
+            sx, sy, sw, sh = bounds
+            center_x = sx + sw // 2
+            center_y = sy + sh // 2
+            await hid.click_at_position(center_x, center_y, click=False)
+    print("Cursor initialized.")
 
     try:
         while True:
