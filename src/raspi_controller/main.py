@@ -7,6 +7,7 @@ from bleak import BleakClient, BleakScanner
 from google import genai
 from google.genai import types
 from PIL import Image
+import time
 
 # --- Configuration ---
 # BLE settings for the ESP32-S3
@@ -90,8 +91,39 @@ class HIDController:
 
 class VisionController:
     """Captures video frames and uses Gemini to decide actions."""
-    def __init__(self):
+    def __init__(self, device_index=0):
         self.client = genai.Client()
+        self.cap = None
+        self.device_index = device_index
+        self._initialize_capture()
+
+    def _initialize_capture(self):
+        """Initializes and configures the video capture device."""
+        print(f"Initializing video capture on device {self.device_index}...")
+        self.cap = cv2.VideoCapture(self.device_index, cv2.CAP_V4L2)
+
+        if not self.cap.isOpened():
+            print(f"FATAL: Could not open video device at index {self.device_index}.")
+            self.cap = None
+            return
+
+        # Configure for 1920x1080 YUYV, which was successful in tests
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        
+        # Let settings apply
+        time.sleep(1)
+        
+        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        print(f"Video capture initialized at {int(width)}x{int(height)}")
+
+    def shutdown(self):
+        """Releases the video capture device."""
+        if self.cap:
+            print("Releasing video capture device...")
+            self.cap.release()
 
     def find_screen_bounds(self, frame: np.ndarray, min_area_ratio=0.5):
         """
@@ -124,28 +156,16 @@ class VisionController:
             
         return cv2.boundingRect(largest_contour)
 
-    async def capture_frame(self, device_index=0, filename="capture.jpg"):
+    def capture_frame(self, filename="capture.jpg"):
         """
-        Captures a single frame from the specified video device, explicitly setting
-        a high-resolution MJPG format.
+        Captures a single frame from the already open video device.
         """
-        print("Capturing frame from video device...")
-        cap = cv2.VideoCapture(device_index)
-        if not cap.isOpened():
-            print(f"Error: Could not open video device at index {device_index}.")
+        if not self.cap or not self.cap.isOpened():
+            print("Error: Capture device is not initialized.")
             return None
 
-        # Set format to YUYV (uncompressed) to bypass potential MJPG decoding issues
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V'))
-        # Set the desired high resolution
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
-
-        # Allow camera to warm up and settings to apply
-        await asyncio.sleep(1)
-
-        ret, frame = cap.read()
-        cap.release()
+        # The device is already open, so we just read a frame.
+        ret, frame = self.cap.read()
 
         if not ret:
             print("Error: Could not read frame.")
@@ -226,9 +246,15 @@ class VisionController:
 async def main():
     """Main execution loop for vision-driven control."""
     hid = HIDController()
-    vision = VisionController()
+    vision = VisionController(device_index=0) # Initialize with the working device index
+
+    if vision.cap is None:
+        print("Exiting due to video capture initialization failure.")
+        vision.shutdown()
+        return
 
     if not await hid.connect():
+        vision.shutdown()
         return
 
     try:
@@ -238,7 +264,7 @@ async def main():
                 break
 
             # Stage 1: See
-            full_frame = await vision.capture_frame()
+            full_frame = vision.capture_frame()
             if full_frame is None:
                 continue
 
@@ -295,6 +321,7 @@ async def main():
         print(f"An unexpected error occurred: {e}")
     finally:
         await hid.disconnect()
+        vision.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main()) 
