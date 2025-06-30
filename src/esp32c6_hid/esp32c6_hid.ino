@@ -1,3 +1,6 @@
+// This firmware is for the Seeed Studio XIAO ESP32-S3.
+// It uses BLE to receive commands and acts as a USB HID keyboard and mouse.
+
 #include <Arduino.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -11,10 +14,9 @@
 #define SERVICE_UUID        "c48e6067-5295-48d3-8d5c-0395f61792b1"
 #define CHARACTERISTIC_UUID "c48e6068-5295-48d3-8d5c-0395f61792b1"
 
-// Onboard LED pin - For Seeed Studio XIAO ESP32C6, the user LED is on GPIO 21
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 21
-#endif
+// Onboard LED pin for Seeed Studio XIAO ESP32-S3.
+// The board package should define LED_BUILTIN.
+// Typically, this is the blue LED on GPIO 21.
 
 // Global variables
 USBHIDKeyboard keyboard;
@@ -43,20 +45,20 @@ class MyServerCallbacks: public BLEServerCallbacks {
 // Characteristic callbacks to handle incoming data
 class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
-      std::string value = pCharacteristic->getValue();
+      String value = pCharacteristic->getValue();
 
       if (value.length() > 0) {
         Serial.print("Received Value: ");
-        Serial.println(value.c_str());
+        Serial.println(value);
 
         // Command parsing logic
-        if (value.rfind("k:", 0) == 0) { // Check if it starts with "k:"
-          String toType = String(value.substr(2).c_str());
+        if (value.startsWith("k:")) {
+          String toType = value.substring(2);
           keyboard.print(toType);
           Serial.print("Typing: ");
           Serial.println(toType);
-        } else if (value.rfind("m:", 0) == 0) {
-          String coords = String(value.substr(2).c_str());
+        } else if (value.startsWith("m:")) {
+          String coords = value.substring(2);
           int commaIndex = coords.indexOf(',');
           if (commaIndex != -1) {
             int x = coords.substring(0, commaIndex).toInt();
@@ -67,8 +69,8 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
             Serial.print(",");
             Serial.println(y);
           }
-        } else if (value.rfind("mc:", 0) == 0) {
-          String button = String(value.substr(3).c_str());
+        } else if (value.startsWith("mc:")) {
+          String button = value.substring(3);
           if (button == "left") {
             mouse.click(MOUSE_LEFT);
             Serial.println("Mouse left click");
@@ -79,8 +81,8 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
             mouse.click(MOUSE_MIDDLE);
             Serial.println("Mouse middle click");
           }
-        } else if (value.rfind("mp:", 0) == 0) {
-          String button = String(value.substr(3).c_str());
+        } else if (value.startsWith("mp:")) {
+          String button = value.substring(3);
           if (button == "left") {
             mouse.press(MOUSE_LEFT);
             Serial.println("Mouse left press");
@@ -91,8 +93,8 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
             mouse.press(MOUSE_MIDDLE);
             Serial.println("Mouse middle press");
           }
-        } else if (value.rfind("mr:", 0) == 0) {
-            String button = String(value.substr(3).c_str());
+        } else if (value.startsWith("mr:")) {
+            String button = value.substring(3);
             if (button == "left") {
                 mouse.release(MOUSE_LEFT);
                 Serial.println("Mouse left release");
@@ -146,12 +148,21 @@ void setup() {
 }
 
 void loop() {
+  unsigned long currentMillis = millis();
+  
   if (deviceConnected) {
-    // Heartbeat LED
-    if (millis() - lastLedToggle > 500) {
+    // Slow "heartbeat" blink when connected (500ms interval)
+    if (currentMillis - lastLedToggle > 500) {
       ledState = !ledState;
       digitalWrite(LED_BUILTIN, ledState);
-      lastLedToggle = millis();
+      lastLedToggle = currentMillis;
+    }
+  } else {
+    // Fast blink when advertising/waiting for connection (250ms interval)
+    if (currentMillis - lastLedToggle > 250) {
+      ledState = !ledState;
+      digitalWrite(LED_BUILTIN, ledState);
+      lastLedToggle = currentMillis;
     }
   }
 } 

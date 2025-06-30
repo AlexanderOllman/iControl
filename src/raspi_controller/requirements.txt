@@ -1,1 +1,4 @@
-bleak 
+bleak
+google-generativeai
+opencv-python
+numpy 
