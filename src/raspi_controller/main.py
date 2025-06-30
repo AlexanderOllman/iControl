@@ -93,37 +93,68 @@ class VisionController:
     def __init__(self):
         self.client = genai.Client()
 
+    def find_screen_bounds(self, frame: np.ndarray, min_area_ratio=0.5):
+        """
+        Finds the bounding box of the actual screen within a letterboxed frame.
+        Returns (x, y, w, h) of the screen area, or None if not found.
+        """
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Threshold to get a binary image. This assumes the screen is brighter than the black bars.
+        _, thresh = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
+        
+        # Find contours
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            print("Warning: No contours found in image.")
+            return None
+
+        # Find the largest contour by area
+        largest_contour = max(contours, key=cv2.contourArea)
+        
+        frame_area = frame.shape[0] * frame.shape[1]
+        contour_area = cv2.contourArea(largest_contour)
+        
+        # Sanity check: ensure the found contour is a significant size
+        if contour_area < frame_area * min_area_ratio:
+            print(f"Warning: Largest contour is only {contour_area / frame_area:.2%} of the frame. Assuming full frame.")
+            return 0, 0, frame.shape[1], frame.shape[0]
+            
+        return cv2.boundingRect(largest_contour)
+
     async def capture_frame(self, device_index=0, filename="capture.jpg"):
         """
-        Captures a single frame from the specified video device at its
-        highest possible resolution.
+        Captures a single frame from the specified video device, explicitly setting
+        a high-resolution MJPG format.
         """
         print("Capturing frame from video device...")
         cap = cv2.VideoCapture(device_index)
         if not cap.isOpened():
             print(f"Error: Could not open video device at index {device_index}.")
-            return None, None, None
+            return None
 
-        # Set a very high resolution to force the driver to the max
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 4096)
+        # Set format to Motion-JPEG
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        # Set the desired high resolution
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
 
         # Allow camera to warm up and settings to apply
         await asyncio.sleep(1)
 
         ret, frame = cap.read()
-        
-        # Get the actual resolution
-        height, width, _ = frame.shape
         cap.release()
 
         if not ret:
             print("Error: Could not read frame.")
-            return None, None, None
+            return None
 
+        height, width, _ = frame.shape
         cv2.imwrite(filename, frame)
         print(f"Frame captured ({width}x{height}) and saved to {filename}")
-        return frame, width, height
+        return frame
 
     async def get_visible_elements(self, image: np.ndarray):
         """Sends an image to Gemini and asks it to identify UI elements."""
@@ -207,11 +238,22 @@ async def main():
                 break
 
             # Stage 1: See
-            frame, width, height = await vision.capture_frame()
-            if frame is None:
+            full_frame = await vision.capture_frame()
+            if full_frame is None:
                 continue
 
-            elements = await vision.get_visible_elements(frame)
+            # Find the actual screen within the frame
+            screen_bounds = vision.find_screen_bounds(full_frame)
+            if screen_bounds is None:
+                continue
+            
+            sx, sy, sw, sh = screen_bounds
+            
+            # Crop the frame to just the screen content
+            screen_crop = full_frame[sy:sy+sh, sx:sx+sw]
+            cv2.imwrite("capture_cropped.jpg", screen_crop) # Save for debugging
+
+            elements = await vision.get_visible_elements(screen_crop)
 
             if not elements or not isinstance(elements, list):
                 print("Could not identify any UI elements.")
@@ -228,18 +270,22 @@ async def main():
                 selected_element = elements[choice - 1]
                 box = selected_element['box_2d']
                 
-                # De-normalize coordinates from 0-1000 to pixel values
-                y0 = int(box[0] / 1000 * height)
-                x0 = int(box[1] / 1000 * width)
-                y1 = int(box[2] / 1000 * height)
-                x1 = int(box[3] / 1000 * width)
+                # De-normalize coordinates relative to the CROPPED image
+                y0_rel = int(box[0] / 1000 * sh)
+                x0_rel = int(box[1] / 1000 * sw)
+                y1_rel = int(box[2] / 1000 * sh)
+                x1_rel = int(box[3] / 1000 * sw)
 
-                # Calculate the center of the bounding box
-                click_x = x0 + (x1 - x0) // 2
-                click_y = y0 + (y1 - y0) // 2
+                # Calculate the center of the bounding box relative to the CROPPED image
+                click_x_rel = x0_rel + (x1_rel - x0_rel) // 2
+                click_y_rel = y0_rel + (y1_rel - y0_rel) // 2
+
+                # Remap the relative coordinates to the FULL frame's coordinate space
+                final_click_x = sx + click_x_rel
+                final_click_y = sy + click_y_rel
                 
-                print(f"\nAction: Clicking on '{selected_element['label']}' at ({click_x}, {click_y})")
-                await hid.click_at_position(click_x, click_y)
+                print(f"\nAction: Clicking on '{selected_element['label']}' at ({final_click_x}, {final_click_y})")
+                await hid.click_at_position(final_click_x, final_click_y)
                 print("Action finished.")
 
             else:
