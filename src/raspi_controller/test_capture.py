@@ -16,12 +16,12 @@ def test_capture(device_index=0, filename="test_capture.jpg"):
     print("Successfully opened video device.")
 
     # --- Set Capture Properties ---
-    # Using 1920x1080 MJPG as a common, reliable fallback.
+    # Using 1920x1080. Trying YUYV (uncompressed) to rule out MJPG decoding issues.
     width = 1920
     height = 1080
-    fourcc = cv2.VideoWriter_fourcc('M', 'J', 'P', 'G')
+    fourcc = cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V')
 
-    print(f"Setting format to MJPG and resolution to {width}x{height}...")
+    print(f"Setting format to YUYV and resolution to {width}x{height}...")
     cap.set(cv2.CAP_PROP_FOURCC, fourcc)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
