@@ -89,7 +89,7 @@ class VisionController:
     def __init__(self):
         self.model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
-    def capture_frame(self, device_index=0, filename="capture.jpg"):
+    async def capture_frame(self, device_index=0, filename="capture.jpg"):
         """Captures a single frame from the specified video device."""
         print("Capturing frame from video device...")
         cap = cv2.VideoCapture(device_index)
@@ -164,7 +164,7 @@ async def main():
             if command.lower() == 'quit':
                 break
 
-            frame, width, height = vision.capture_frame()
+            frame, width, height = await vision.capture_frame()
             if frame is None:
                 continue
 
