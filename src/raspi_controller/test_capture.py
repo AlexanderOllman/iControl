@@ -1,90 +1,73 @@
 import cv2
 import time
+import subprocess
 
-def test_capture(device_index=0, filename="test_capture.jpg"):
+def test_capture_with_preconfig(device_index=0, filename="test_capture.jpg"):
     """
-    A minimal script to test video capture functionality from a specific device.
+    A minimal script to test video capture functionality.
+    It first uses a command-line tool (v4l2-ctl) to configure the device,
+    then attempts to read a frame with OpenCV.
     """
     print("="*40)
     print(f"TESTING DEVICE: /dev/video{device_index}")
     print("="*40)
+    
+    device_path = f"/dev/video{device_index}"
+    width = 1920
+    height = 1080
+    
+    # --- Step 1: Pre-configure the device with v4l2-ctl ---
+    print("Attempting to pre-configure device with v4l2-ctl...")
+    command = [
+        "v4l2-ctl",
+        "-d", device_path,
+        "--set-fmt-video", f"width={width},height={height},pixelformat=YUYV"
+    ]
+    
+    try:
+        # We use check=True so it will raise an exception if the command fails
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        print("v4l2-ctl command executed successfully.")
+    except FileNotFoundError:
+        print("FATAL: 'v4l2-ctl' command not found. Please install with 'sudo apt-get install v4l-utils'")
+        return
+    except subprocess.CalledProcessError as e:
+        print(f"FATAL: v4l2-ctl command failed.")
+        print(f"  - Stderr: {e.stderr}")
+        return
 
-    print(f"Attempting to open video device at index {device_index}...")
-    # Add the CAP_V4L2 backend flag, which can sometimes help on Linux
+    # --- Step 2: Attempt to capture with OpenCV ---
+    print(f"Attempting to open video device at index {device_index} with OpenCV...")
     cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
 
     if not cap.isOpened():
-        print(f"INFO: Could not open video device at index {device_index}.")
-        return False
+        print(f"ERROR: OpenCV could not open video device at index {device_index} after pre-configuration.")
+        return
 
-    print("Successfully opened video device.")
-
-    # --- Set Capture Properties ---
-    # Using 1920x1080. Trying YUYV (uncompressed) to rule out MJPG decoding issues.
-    width = 1920
-    height = 1080
-    fourcc = cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V')
-
-    print(f"Setting format to YUYV and resolution to {width}x{height}...")
-    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-    # Verify the settings
-    actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print("Successfully opened video device with OpenCV.")
     
-    print(f"Device responded with format: {''.join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])}")
-    print(f"Device responded with resolution: {actual_width}x{actual_height}")
-    
-    # Allow the camera to stabilize
-    print("Waiting for 2 seconds for camera to stabilize...")
-    time.sleep(2)
+    # Allow a moment to stabilize after configuration
+    time.sleep(1)
 
-    # --- Read a single frame ---
     print("Attempting to read a frame...")
     ret, frame = cap.read()
 
     if not ret or frame is None:
         print("ERROR: Failed to read frame from the device.")
         cap.release()
-        return False
+        return
 
     print("Successfully read a frame.")
 
-    # --- Save the frame ---
     try:
         cv2.imwrite(filename, frame)
         print(f"SUCCESS: Saved captured frame to '{filename}'")
     except Exception as e:
         print(f"ERROR: Could not save the frame. Error: {e}")
-        return False
 
-    # --- Release the camera ---
     print("Releasing video device.")
     cap.release()
-    return True
 
 
 if __name__ == "__main__":
-    devices_to_test = [0, 1, 2, 3] # Covers /dev/video0 to /dev/video3
-    successful_capture = False
-    
-    print("Starting capture test across multiple devices...")
-    
-    for i in devices_to_test:
-        filename = f"test_capture_device_{i}.jpg"
-        if test_capture(device_index=i, filename=filename):
-            successful_capture = True
-            print(f"--> SUCCESSFUL CAPTURE on device {i}!")
-    
-    if not successful_capture:
-        print("\n" + "="*40)
-        print("TEST FAILED: No valid image captured from any device.")
-        print("="*40)
-    else:
-        print("\n" + "="*40)
-        print("TEST FINISHED: At least one device captured an image.")
-        print("Please check the 'test_capture_device_*.jpg' files.")
-        print("="*40) 
+    test_capture_with_preconfig(device_index=0, filename="test_capture_final.jpg") 
