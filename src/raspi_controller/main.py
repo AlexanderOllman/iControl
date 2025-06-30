@@ -125,7 +125,7 @@ class VisionController:
             print("Releasing video capture device...")
             self.cap.release()
 
-    def find_screen_bounds(self, frame: np.ndarray, min_area_ratio=0.5):
+    def find_screen_bounds(self, frame: np.ndarray, min_area_ratio=0.10):
         """
         Finds the bounding box of the actual screen within a letterboxed frame.
         Returns (x, y, w, h) of the screen area, or None if not found.
