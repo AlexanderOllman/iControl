@@ -3,15 +3,19 @@ import time
 
 def test_capture(device_index=0, filename="test_capture.jpg"):
     """
-    A minimal script to test video capture functionality.
-    It sets a known-good resolution and format and saves a single frame.
+    A minimal script to test video capture functionality from a specific device.
     """
+    print("="*40)
+    print(f"TESTING DEVICE: /dev/video{device_index}")
+    print("="*40)
+
     print(f"Attempting to open video device at index {device_index}...")
-    cap = cv2.VideoCapture(device_index)
+    # Add the CAP_V4L2 backend flag, which can sometimes help on Linux
+    cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
 
     if not cap.isOpened():
-        print(f"FATAL: Could not open video device at index {device_index}.")
-        return
+        print(f"INFO: Could not open video device at index {device_index}.")
+        return False
 
     print("Successfully opened video device.")
 
@@ -43,23 +47,44 @@ def test_capture(device_index=0, filename="test_capture.jpg"):
     ret, frame = cap.read()
 
     if not ret or frame is None:
-        print("FATAL: Failed to read frame from the device.")
+        print("ERROR: Failed to read frame from the device.")
         cap.release()
-        return
+        return False
 
     print("Successfully read a frame.")
 
     # --- Save the frame ---
     try:
         cv2.imwrite(filename, frame)
-        print(f"Successfully saved captured frame to '{filename}'")
+        print(f"SUCCESS: Saved captured frame to '{filename}'")
     except Exception as e:
-        print(f"FATAL: Could not save the frame. Error: {e}")
+        print(f"ERROR: Could not save the frame. Error: {e}")
+        return False
 
     # --- Release the camera ---
     print("Releasing video device.")
     cap.release()
+    return True
 
 
 if __name__ == "__main__":
-    test_capture() 
+    devices_to_test = [0, 1, 2, 3] # Covers /dev/video0 to /dev/video3
+    successful_capture = False
+    
+    print("Starting capture test across multiple devices...")
+    
+    for i in devices_to_test:
+        filename = f"test_capture_device_{i}.jpg"
+        if test_capture(device_index=i, filename=filename):
+            successful_capture = True
+            print(f"--> SUCCESSFUL CAPTURE on device {i}!")
+    
+    if not successful_capture:
+        print("\n" + "="*40)
+        print("TEST FAILED: No valid image captured from any device.")
+        print("="*40)
+    else:
+        print("\n" + "="*40)
+        print("TEST FINISHED: At least one device captured an image.")
+        print("Please check the 'test_capture_device_*.jpg' files.")
+        print("="*40) 
