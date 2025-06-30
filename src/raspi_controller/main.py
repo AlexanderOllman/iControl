@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from bleak import BleakClient, BleakScanner
 from google import genai
+from google.genai import types
 from PIL import Image
 
 # --- Configuration ---
@@ -135,15 +136,24 @@ class VisionController:
 
         User command: "{command}"
         """
+
+        # Encode the cv2 frame (numpy array) to JPEG bytes
+        success, encoded_image = cv2.imencode('.jpg', image)
+        if not success:
+            print("Error: Could not encode image to JPEG.")
+            return None
         
-        # Convert the numpy array (frame from cv2) to a PIL Image
-        rgb_frame = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_frame)
+        image_part = types.Part.from_bytes(
+            data=encoded_image.tobytes(),
+            mime_type='image/jpeg'
+        )
         
         try:
-            response = await self.client.models.generate_content_async(
+            # Use asyncio.to_thread to run the blocking SDK call without freezing the event loop.
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
                 model='gemini-2.5-flash',
-                contents=[prompt, pil_image]
+                contents=[image_part, prompt] # Per best practices: image first, then text.
             )
             
             # Clean up the response to extract only the JSON part
