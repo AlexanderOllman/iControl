@@ -34,6 +34,9 @@ class HIDController:
     """Manages the BLE connection and sends basic HID commands."""
     def __init__(self):
         self.client: BleakClient = None
+        # The cursor's position is unknown on connect. We assume it's at (0,0)
+        # and all subsequent moves will be relative to this assumed origin.
+        self.current_pos = (0, 0)
 
     async def connect(self):
         print(f"Scanning for '{DEVICE_NAME}'...")
@@ -76,21 +79,25 @@ class HIDController:
 
     async def click_at_position(self, x: int, y: int, click=True):
         """
-        Moves to an absolute screen position and optionally clicks.
-        Uses a reset-to-origin trick for absolute positioning.
+        Moves to an absolute screen position by calculating the required
+        relative move from its last known position.
         """
-        if click:
-            print(f"  - Clicking at ({x}, {y})")
-        else:
-            print(f"  - Moving to center at ({x}, {y})")
+        # Calculate the relative move needed from the current known position
+        dx = x - self.current_pos[0]
+        dy = y - self.current_pos[1]
 
-        # 1. Reset cursor to top-left (0,0) by moving a large negative distance
-        await self.move_mouse_relative(-32767, -32767)
+        if click:
+            print(f"  - Clicking at ({x}, {y})... Moving ({dx}, {dy})")
+        else:
+            print(f"  - Moving to ({x}, {y})... Moving ({dx}, {dy})")
+
+        # Send the relative move command
+        await self.move_mouse_relative(dx, dy)
+        
+        # Update the current position state
+        self.current_pos = (x, y)
+        
         await asyncio.sleep(0.05)
-        # 2. Move to the absolute target coordinates
-        await self.move_mouse_relative(x, y)
-        await asyncio.sleep(0.05)
-        # 3. Perform the click if requested
         if click:
             await self._send_command("mc:left")
 
@@ -252,7 +259,7 @@ class VisionController:
 async def main():
     """Main execution loop for vision-driven control."""
     hid = HIDController()
-    vision = VisionController(device_index=0) # Initialize with the working device index
+    vision = VisionController(device_index=0)
 
     if vision.cap is None:
         print("Exiting due to video capture initialization failure.")
@@ -270,6 +277,7 @@ async def main():
         bounds = vision.find_screen_bounds(initial_frame)
         if bounds:
             sx, sy, sw, sh = bounds
+            # The first move establishes the origin for our state tracking.
             center_x = sx + sw // 2
             center_y = sy + sh // 2
             await hid.click_at_position(center_x, center_y, click=False)
