@@ -39,10 +39,8 @@ class HIDController:
     """Manages the BLE connection and sends basic HID commands."""
     def __init__(self):
         self.client: BleakClient = None
-        # The cursor's position is unknown on connect. We assume it's at (0,0)
-        # and all subsequent moves will be relative to this assumed origin.
-        self.current_pos = (0, 0)
-
+        # No longer tracking state here. We reset before every move.
+        
     async def connect(self):
         print(f"Scanning for '{DEVICE_NAME}'...")
         device = await BleakScanner.find_device_by_name(DEVICE_NAME)
@@ -101,23 +99,19 @@ class HIDController:
 
     async def click_at_position(self, x: int, y: int, click=True):
         """
-        Moves to an absolute screen position by calculating the required
-        relative move from its last known position.
+        Moves to an absolute screen position by first resetting the cursor
+        to the origin and then sending the move command.
         """
-        # Calculate the relative move needed from the current known position
-        dx = x - self.current_pos[0]
-        dy = y - self.current_pos[1]
+        # Always reset the cursor to the top-left before every action.
+        await self.reset_cursor_position()
 
         if click:
-            print(f"  - Clicking at ({x}, {y})... Moving ({dx}, {dy})")
+            print(f"  - Clicking at ({x}, {y})")
         else:
-            print(f"  - Moving to ({x}, {y})... Moving ({dx}, {dy})")
+            print(f"  - Moving to ({x}, {y})")
 
-        # Send the relative move command
-        await self.move_mouse_relative(dx, dy)
-        
-        # Update the current position state
-        self.current_pos = (x, y)
+        # Send the move command. The chunking logic will handle it.
+        await self.move_mouse_relative(x, y)
         
         await asyncio.sleep(0.05)
         if click:
@@ -125,13 +119,12 @@ class HIDController:
 
     async def reset_cursor_position(self):
         """
-        Resets the cursor to the top-left origin (0,0) by sending a
-        series of large negative moves and resetting the internal state.
+        Resets the cursor to the top-left origin by spamming negative moves.
         """
         print("  - Resetting cursor to origin (0,0)...")
-        # The chunking logic in move_mouse_relative will handle this large move.
-        await self.move_mouse_relative(-5000, -5000)
-        self.current_pos = (0, 0)
+        for _ in range(10):
+            # This does not use the chunking logic, it's a direct command.
+            await self._send_command("m:-100,-100")
         await asyncio.sleep(0.05)
 
 class VisionController:
@@ -303,13 +296,9 @@ async def main():
         vision.shutdown()
         return
 
-    # Initialize cursor position by resetting and moving to center of the DESTINATION space
-    print("\nInitializing cursor position...")
-    await hid.reset_cursor_position()
-    center_x = DEST_WIDTH // 2
-    center_y = DEST_HEIGHT // 2
-    await hid.click_at_position(center_x, center_y, click=False)
-    print("Cursor initialized.")
+    # No longer need to initialize cursor position here.
+    # The reset is handled by click_at_position.
+    print("\nHID Controller connected. Ready for commands.")
 
     try:
         while True:
