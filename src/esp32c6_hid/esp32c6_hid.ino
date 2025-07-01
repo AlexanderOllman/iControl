@@ -25,6 +25,17 @@ bool deviceConnected = false;
 unsigned long lastLedToggle = 0;
 bool ledState = false;
 
+// Keycodes for special keys
+#define KEY_VO_MODIFIER_CTRL KEY_LEFT_CTRL
+#define KEY_VO_MODIFIER_ALT KEY_LEFT_ALT
+
+#define KEY_VO_NEXT KEY_RIGHT_ARROW
+#define KEY_VO_PREVIOUS KEY_LEFT_ARROW
+#define KEY_VO_ACTIVATE ' '
+#define KEY_VO_HOME 'h'
+#define KEY_VO_BACK KEY_ESC
+#define KEY_VO_APP_SWITCHER 'h' // Press twice
+
 // Server callbacks to handle connection and disconnection
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -57,6 +68,39 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
           keyboard.print(toType);
           Serial.print("Typing: ");
           Serial.println(toType);
+        } else if (value.startsWith("kh:")) { // HID Key Press
+          String keyStr = value.substring(3);
+          uint8_t keyCode = (uint8_t)keyStr.toInt();
+          if (keyCode > 0) {
+            keyboard.press(keyCode);
+            delay(50); // Small delay to ensure key press registers
+            keyboard.release(keyCode);
+            Serial.print("Pressed HID key: ");
+            Serial.println(keyCode);
+          }
+        } else if (value.startsWith("ko:")) { // Key Combo with VO
+            char key = value.charAt(3);
+            if (key) {
+                keyboard.press(KEY_VO_MODIFIER_CTRL);
+                keyboard.press(KEY_VO_MODIFIER_ALT);
+                keyboard.press(key);
+                delay(50);
+                keyboard.releaseAll();
+                Serial.print("Pressed VO combo with key: ");
+                Serial.println(key);
+            }
+        } else if (value.startsWith("ko_special:")) { // Key Combo with VO and a special key
+            String keyStr = value.substring(11);
+            uint8_t keyCode = (uint8_t)keyStr.toInt();
+            if (keyCode > 0) {
+                keyboard.press(KEY_VO_MODIFIER_CTRL);
+                keyboard.press(KEY_VO_MODIFIER_ALT);
+                keyboard.press(keyCode);
+                delay(50);
+                keyboard.releaseAll();
+                Serial.print("Pressed VO combo with special key: ");
+                Serial.println(keyCode);
+            }
         } else if (value.startsWith("m:")) {
           String coords = value.substring(2);
           int commaIndex = coords.indexOf(',');

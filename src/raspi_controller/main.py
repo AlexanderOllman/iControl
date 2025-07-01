@@ -1,365 +1,278 @@
-import asyncio
-import os
-import json
 import cv2
-import numpy as np
-from bleak import BleakClient, BleakScanner
-from google import genai
-from google.genai import types
+import asyncio
+import bleak
+import os
 from PIL import Image
+import google.generativeai as genai
+import json
 import time
 
 # --- Configuration ---
-# BLE settings for the ESP32-S3
-DEVICE_NAME = "iControl HID"
-SERVICE_UUID = "c48e6067-5295-48d3-8d5c-0395f61792b1"
-CHARACTERISTIC_UUID = "c48e6068-5295-48d3-8d5c-0395f61792b1"
+ESP32_ADDRESS = "34:B4:72:0A:7B:5E" 
+# This is the characteristic UUID for our custom BLE service
+UART_TX_CHARACTERISTIC_UUID = "c48e6068-5295-48d3-8d5c-0395f61792b1"
 
-# NEW: The destination coordinate space for the HID device (e.g., iPhone screen).
-# This may need some fine-tuning but is based on user observation.
-DEST_WIDTH = 280
-DEST_HEIGHT = 550
+# Configure the Gemini API key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable not set")
+genai.configure(api_key=GEMINI_API_KEY)
 
-# --- Gemini API Setup ---
-# IMPORTANT: Set your Gemini API key as an environment variable before running.
-# The google-generativeai library will automatically use it.
-# In your terminal, run:
-# export GEMINI_API_KEY='YOUR_API_KEY'
-try:
-    # This check ensures the script fails early if the key isn't set.
-    os.environ["GEMINI_API_KEY"]
-except KeyError:
-    print("="*60)
-    print("ERROR: GEMINI_API_KEY environment variable not set.")
-    print("Please set it by running: export GEMINI_API_KEY='YOUR_API_KEY'")
-    print("="*60)
-    exit()
+# --- HID Keycodes (as defined in HID specification) ---
+KEY_RIGHT_ARROW = 0x4F
+KEY_LEFT_ARROW = 0x50
+KEY_DOWN_ARROW = 0x51
+KEY_UP_ARROW = 0x52
+KEY_ESC = 0x29
+KEY_RETURN = 0x28
 
-class HIDController:
-    """Manages the BLE connection and sends basic HID commands."""
-    def __init__(self):
-        self.client: BleakClient = None
-        # No longer tracking state here. We reset before every move.
+# Global variable for the video capture
+cap = None
+
+def init_camera(device_index=0, width=1920, height=1080):
+    """Initializes and holds the video capture object."""
+    global cap
+    if cap is not None:
+        cap.release()
+    
+    cap = cv2.VideoCapture(device_index)
+    if not cap.isOpened():
+        raise IOError(f"Cannot open video device {device_index}")
+    
+    # It's important to set a resolution the device supports.
+    # 1920x1080 is common for many capture cards.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    
+    # Let the camera warm up
+    time.sleep(2) 
+    print(f"Camera initialized on /dev/video{device_index}")
+    # Read a few frames to flush the buffer
+    for _ in range(5):
+        cap.read()
+    print("Camera buffer flushed.")
+
+
+def capture_frame_from_device():
+    """Captures a single frame from the initialized video device."""
+    global cap
+    if cap is None or not cap.isOpened():
+        print("Camera not initialized. Initializing now...")
+        init_camera()
+        if cap is None or not cap.isOpened():
+             print("Failed to initialize camera.")
+             return None
+
+    ret, frame = cap.read()
+    # Flush buffer by reading a few frames
+    for _ in range(3):
+        ret, frame = cap.read()
+
+    if not ret:
+        print("Failed to grab frame")
+        # Try to re-initialize camera on failure
+        init_camera()
+        ret, frame = cap.read()
+        if not ret:
+            print("Still failing to grab frame after re-init.")
+            return None
+            
+    return frame
+
+def find_iphone_screen(frame, min_area_ratio=0.10):
+    """
+    Finds the largest contour in the frame that could be the iPhone screen,
+    and returns the cropped image.
+    """
+    if frame is None:
+        return None, None
         
-    async def connect(self):
-        print(f"Scanning for '{DEVICE_NAME}'...")
-        device = await BleakScanner.find_device_by_name(DEVICE_NAME)
-        if device is None:
-            print(f"Could not find device with name '{DEVICE_NAME}'")
-            return False
-        print(f"Connecting to {device.name} ({device.address})...")
-        self.client = BleakClient(device)
-        try:
-            await self.client.connect()
-            print("Connected to HID device!")
-            return True
-        except Exception as e:
-            print(f"Failed to connect: {e}")
-            self.client = None
-            return False
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 30, 255, cv2.THRESH_BINARY)
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None, None
+        
+    frame_area = frame.shape[0] * frame.shape[1]
+    min_area = frame_area * min_area_ratio
+    
+    largest_contour = None
+    max_area = 0
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > min_area and area > max_area:
+            largest_contour = contour
+            max_area = area
 
-    async def disconnect(self):
-        if self.client and self.client.is_connected:
-            await self.client.disconnect()
-            print("Disconnected from HID device.")
-        self.client = None
+    if largest_contour is not None:
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        # Add a small buffer/margin
+        margin = 5
+        x = max(0, x - margin)
+        y = max(0, y - margin)
+        w = min(frame.shape[1] - x, w + 2 * margin)
+        h = min(frame.shape[0] - y, h + 2 * margin)
+        
+        cropped_frame = frame[y:y+h, x:x+w]
+        return cropped_frame, (x, y, w, h)
+        
+    return None, None
 
-    async def _send_command(self, command: str):
-        if not self.client or not self.client.is_connected:
-            print("Error: Not connected to HID device.")
-            return
+
+async def send_command_to_esp32(client, command):
+    """Sends a command string to the ESP32 over BLE."""
+    if client and client.is_connected:
         try:
-            # We add a small delay to prevent overwhelming the BLE stack
-            await asyncio.sleep(0.005)
-            await self.client.write_gatt_char(CHARACTERISTIC_UUID, bytearray(command, 'utf-8'), response=False)
+            await client.write_gatt_char(UART_TX_CHARACTERISTIC_UUID, command.encode('utf-8'))
+            print(f"Sent: {command}")
         except Exception as e:
             print(f"Failed to send command: {e}")
+    else:
+        print("Not connected to ESP32.")
 
-    async def move_mouse_relative(self, dx: int, dy: int):
-        """
-        Moves the mouse by a relative offset, breaking large moves into
-        smaller chunks to avoid HID report overflow.
-        """
-        MAX_MOVE = 125 # Max value for a signed 8-bit int is 127
+async def perform_voiceover_action(client, action, text=None):
+    """Constructs and sends the correct command based on the action."""
+    if action == "next":
+        await send_command_to_esp32(client, f"ko_special:{KEY_RIGHT_ARROW}")
+    elif action == "previous":
+        await send_command_to_esp32(client, f"ko_special:{KEY_LEFT_ARROW}")
+    elif action == "activate":
+        await send_command_to_esp32(client, f"ko: ") # Space bar
+    elif action == "home":
+        await send_command_to_esp32(client, "ko:h")
+    elif action == "back":
+        await send_command_to_esp32(client, f"kh:{KEY_ESC}")
+    elif action == "type" and text:
+        # First, activate the text field if needed (often the current focus)
+        await send_command_to_esp32(client, f"ko: ") 
+        time.sleep(0.5)
+        # Then, type the text
+        await send_command_to_esp32(client, f"k:{text}")
+        time.sleep(0.5)
+        # Then, press return
+        await send_command_to_esp32(client, f"kh:{KEY_RETURN}")
+    else:
+        print(f"Unknown action: {action}")
 
-        while dx != 0 or dy != 0:
-            # Determine the move for this chunk
-            move_dx = max(-MAX_MOVE, min(MAX_MOVE, dx))
-            move_dy = max(-MAX_MOVE, min(MAX_MOVE, dy))
-            
-            # Send the chunked move
-            await self._send_command(f"m:{move_dx},{move_dy}")
-            
-            # Decrement the remaining distance
-            dx -= move_dx
-            dy -= move_dy
 
-    async def type_string(self, text: str):
-        await self._send_command(f"k:{text}")
+def get_next_action_from_gemini(objective, image_data):
+    """
+    Sends the current screen and objective to Gemini and gets the next action.
+    """
+    if not image_data:
+        print("No image data to send to Gemini.")
+        return None
 
-    async def click_at_position(self, x: int, y: int, click=True):
-        """
-        Moves to an absolute screen position by first resetting the cursor
-        to the origin and then sending the move command.
-        """
-        # Always reset the cursor to the top-left before every action.
-        await self.reset_cursor_position()
+    model = genai.GenerativeModel('gemini-1.5-pro-latest')
+    
+    prompt = f"""
+    You are an AI assistant controlling an iPhone via the VoiceOver accessibility feature.
+    Your current high-level objective is: "{objective}".
+    
+    The user has provided you with the current screen capture. The black rectangle on the screen indicates the current VoiceOver focus.
+    
+    Based on the image and your objective, what is the single next action to take?
+    Your response must be a single JSON object with an "action" key.
+    The possible values for "action" are:
+    - "next": To move to the next UI element.
+    - "previous": To move to the previous UI element.
+    - "activate": To "tap" the currently focused element.
+    - "home": To go to the home screen (e.g., to use Spotlight search).
+    - "back": To go back to the previous screen.
+    - "type": To type text into a focused text field. If you choose this, you must also provide a "text" key with the string to type.
+    - "done": If you believe the objective is complete.
 
-        if click:
-            print(f"  - Clicking at ({x}, {y})")
-        else:
-            print(f"  - Moving to ({x}, {y})")
+    Example Responses:
+    {{"action": "next"}}
+    {{"action": "activate"}}
+    {{"action": "type", "text": "Notes"}}
+    {{"action": "done"}}
 
-        # Send the move command. The chunking logic will handle it.
-        await self.move_mouse_relative(x, y)
+    Analyze the screen and determine the best next step to achieve: "{objective}".
+    """
+    
+    try:
+        response = model.generate_content([prompt, image_data])
         
-        await asyncio.sleep(0.05)
-        if click:
-            await self._send_command("mc:left")
-
-    async def reset_cursor_position(self):
-        """
-        Resets the cursor to the top-left origin by spamming negative moves.
-        """
-        print("  - Resetting cursor to origin (0,0)...")
-        for _ in range(10):
-            # This does not use the chunking logic, it's a direct command.
-            await self._send_command("m:-100,-100")
-        await asyncio.sleep(0.05)
-
-class VisionController:
-    """Captures video frames and uses Gemini to decide actions."""
-    def __init__(self, device_index=0):
-        self.client = genai.Client()
-        self.cap = None
-        self.device_index = device_index
-        self._initialize_capture()
-
-    def _initialize_capture(self):
-        """Initializes and configures the video capture device."""
-        print(f"Initializing video capture on device {self.device_index}...")
-        self.cap = cv2.VideoCapture(self.device_index, cv2.CAP_V4L2)
-
-        if not self.cap.isOpened():
-            print(f"FATAL: Could not open video device at index {self.device_index}.")
-            self.cap = None
-            return
-
-        # Configure for 1920x1080 YUYV, which was successful in tests
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('Y', 'U', 'Y', 'V'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        # Clean up the response to extract the JSON
+        text_response = response.text.strip().replace("```json", "").replace("```", "").strip()
+        print(f"Gemini response: {text_response}")
         
-        # Let settings apply
-        time.sleep(1)
+        action_json = json.loads(text_response)
+        return action_json
         
-        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        print(f"Video capture initialized at {int(width)}x{int(height)}")
+    except Exception as e:
+        print(f"Error getting action from Gemini: {e}")
+        print(f"Raw response was: {response.text if 'response' in locals() else 'No response'}")
+        return None
 
-    def shutdown(self):
-        """Releases the video capture device."""
-        if self.cap:
-            print("Releasing video capture device...")
-            self.cap.release()
-
-    def find_screen_bounds(self, frame: np.ndarray, min_area_ratio=0.10):
-        """
-        Finds the bounding box of the actual screen within a letterboxed frame.
-        Returns (x, y, w, h) of the screen area, or None if not found.
-        """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Use Otsu's binarization which automatically finds an optimal threshold
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if not contours:
-            print("Warning: No contours found in image.")
-            return None
-
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        frame_area = frame.shape[0] * frame.shape[1]
-        contour_area = cv2.contourArea(largest_contour)
-        
-        # If the contour is too small, it's probably noise. Return the whole frame.
-        if contour_area < frame_area * min_area_ratio:
-            print(f"Warning: Largest contour is only {contour_area / frame_area:.2%} of the frame. Assuming full frame.")
-            return 0, 0, frame.shape[1], frame.shape[0]
-            
-        return cv2.boundingRect(largest_contour)
-
-    def capture_frame(self, filename="capture.jpg"):
-        """
-        Captures a fresh frame from the open device by clearing the buffer.
-        """
-        if not self.cap or not self.cap.isOpened():
-            print("Error: Capture device is not initialized.")
-            return None
-
-        # Read and discard 5 frames to clear the buffer of any stale ones
-        for _ in range(5):
-            self.cap.read()
-
-        # Now, read the frame we actually want
-        ret, frame = self.cap.read()
-
-        if not ret:
-            print("Error: Could not read a fresh frame.")
-            return None
-
-        height, width, _ = frame.shape
-        cv2.imwrite(filename, frame)
-        print(f"Frame captured ({width}x{height}) and saved to {filename}")
-        return frame
-
-    async def get_visible_elements(self, image: np.ndarray):
-        """Sends an image to Gemini and asks it to identify UI elements."""
-        print("Asking Gemini to identify UI elements...")
-        prompt = """
-        Analyze the provided screenshot and identify all significant and clickable UI elements.
-        Return a JSON list where each entry represents an element. Each entry must contain:
-        1. "label": A concise and descriptive text label for the element (e.g., "Notes App Icon", "Search Bar", "Settings Gear").
-        2. "box_2d": The bounding box for the element as a list of four numbers [y_min, x_min, y_max, x_max] normalized to 1000.
-
-        Do not identify the phone's status bar elements like time or battery. Focus on interactable application icons and widgets.
-        Respond with ONLY the JSON list. Ensure the JSON is perfectly formatted, with commas between all elements except the last one.
-        """
-        
-        success, encoded_image = cv2.imencode('.jpg', image)
-        if not success:
-            print("Error encoding image")
-            return None
-
-        image_part = types.Part.from_bytes(data=encoded_image.tobytes(), mime_type='image/jpeg')
-
-        try:
-            # The config object from the example. We are not forcing a mime type here,
-            # as the prompt is strong enough to ensure JSON output.
-            config = types.GenerateContentConfig(      
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
-            ) 
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model='gemini-2.5-flash',
-                contents=[image_part, prompt],
-                config=config
-            )
-            elements = json.loads(response.text.strip().replace("```json", "").replace("```", "").strip())
-            return elements
-        except Exception as e:
-            print(f"Error getting UI elements from Gemini: {e}")
-            return None
-
-    async def choose_element_to_click(self, elements: list, command: str):
-        """Asks Gemini which of the identified elements to click based on the user's command."""
-        print("Asking Gemini which element to click...")
-        
-        # Format the list for the prompt
-        formatted_elements = "\n".join([f'{i+1}: {element["label"]}' for i, element in enumerate(elements)])
-
-        prompt = f"""
-        Given the user's command: '{command}'
-        And the following list of UI elements I can see on the screen:
-        {formatted_elements}
-
-        Which element number should be clicked to satisfy the user's command?
-        Respond with ONLY the number corresponding to the element in the list.
-        If no element is a clear match, respond with the number 0.
-        """
-        
-        try:
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model='gemini-2.5-flash',
-                contents=[prompt]
-            )
-            choice = int(response.text.strip())
-            return choice
-        except Exception as e:
-            print(f"Error getting choice from Gemini: {e}")
-            return 0
 
 async def main():
-    """Main execution loop for vision-driven control."""
-    hid = HIDController()
-    vision = VisionController(device_index=0)
+    """Main control loop."""
+    print("Initializing camera...")
+    init_camera()
 
-    if vision.cap is None:
-        print("Exiting due to video capture initialization failure.")
-        vision.shutdown()
-        return
-
-    if not await hid.connect():
-        vision.shutdown()
-        return
-
-    # No longer need to initialize cursor position here.
-    # The reset is handled by click_at_position.
-    print("\nHID Controller connected. Ready for commands.")
-
-    try:
-        while True:
-            command = input("\nEnter your command (or 'quit' to exit): ")
-            if command.lower() == 'quit':
-                break
-
-            full_frame = vision.capture_frame()
-            if full_frame is None:
-                continue
-
-            screen_bounds = vision.find_screen_bounds(full_frame)
-            if screen_bounds is None:
-                continue
+    print(f"Attempting to connect to ESP32 at {ESP32_ADDRESS}...")
+    async with bleak.BleakClient(ESP32_ADDRESS) as client:
+        if client.is_connected:
+            print("Connected to ESP32!")
             
-            sx, sy, sw, sh = screen_bounds
-            screen_crop = full_frame[sy:sy+sh, sx:sx+sw]
-            cv2.imwrite("capture_cropped.jpg", screen_crop)
-
-            elements = await vision.get_visible_elements(screen_crop)
-
-            if not elements or not isinstance(elements, list):
-                print("Could not identify any UI elements.")
-                continue
-
-            print("\nI can see the following elements:")
-            for i, element in enumerate(elements):
-                print(f"  {i+1}: {element['label']}")
-
-            choice = await vision.choose_element_to_click(elements, command)
-
-            if choice > 0 and choice <= len(elements):
-                selected_element = elements[choice - 1]
-                box = selected_element['box_2d']
+            objective = input("What is your objective? (e.g., 'Open the notes app and write a new note') ")
+            
+            for i in range(20): # Limit to 20 steps to prevent infinite loops
+                print(f"\n--- Step {i+1} ---")
                 
-                # De-normalize coordinates relative to the CROPPED image
-                y0_rel = int(box[0] / 1000 * sh)
-                x0_rel = int(box[1] / 1000 * sw)
-                y1_rel = int(box[2] / 1000 * sh)
-                x1_rel = int(box[3] / 1000 * sw)
-
-                # Calculate the center of the bounding box in the CROPPED image space
-                click_x_rel = x0_rel + (x1_rel - x0_rel) // 2
-                click_y_rel = y0_rel + (y1_rel - y0_rel) // 2
-
-                # --- NEW: Map from cropped image space to destination HID space ---
-                final_click_x = int((click_x_rel / sw) * DEST_WIDTH)
-                final_click_y = int((click_y_rel / sh) * DEST_HEIGHT)
+                # 1. Capture and process frame
+                frame = capture_frame_from_device()
+                if frame is None:
+                    print("Could not get frame, skipping step.")
+                    await asyncio.sleep(2)
+                    continue
                 
-                print(f"\nAction: Clicking on '{selected_element['label']}' at mapped coords ({final_click_x}, {final_click_y})")
-                await hid.click_at_position(final_click_x, final_click_y)
-                print("Action finished.")
+                cropped_frame, _ = find_iphone_screen(frame)
+                if cropped_frame is None:
+                    print("Could not find iPhone screen in frame, using full frame.")
+                    # Use the full frame as a fallback
+                    pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                else:
+                    pil_image = Image.fromarray(cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB))
+                
+                # Save for debugging
+                pil_image.save("capture_cropped.jpg")
 
+                # 2. Get next action from Gemini
+                action_data = get_next_action_from_gemini(objective, pil_image)
+
+                if not action_data or "action" not in action_data:
+                    print("Could not determine next action. Stopping.")
+                    break
+                
+                action = action_data.get("action")
+                text_to_type = action_data.get("text")
+
+                # 3. Perform action
+                if action == "done":
+                    print("Objective complete!")
+                    break
+                
+                await perform_voiceover_action(client, action, text_to_type)
+                
+                # Wait for UI to update
+                await asyncio.sleep(2) 
             else:
-                print("No suitable element found to perform the action.")
+                print("Reached maximum step limit.")
 
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-    finally:
-        await hid.disconnect()
-        vision.shutdown()
+        else:
+            print("Failed to connect to ESP32.")
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        asyncio.run(main())
+    finally:
+        if cap is not None:
+            cap.release()
+        print("Camera released.") 
