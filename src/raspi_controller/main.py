@@ -66,16 +66,33 @@ class HIDController:
             print("Error: Not connected to HID device.")
             return
         try:
+            # We add a small delay to prevent overwhelming the BLE stack
+            await asyncio.sleep(0.005)
             await self.client.write_gatt_char(CHARACTERISTIC_UUID, bytearray(command, 'utf-8'), response=False)
         except Exception as e:
             print(f"Failed to send command: {e}")
 
+    async def move_mouse_relative(self, dx: int, dy: int):
+        """
+        Moves the mouse by a relative offset, breaking large moves into
+        smaller chunks to avoid HID report overflow.
+        """
+        MAX_MOVE = 125 # Max value for a signed 8-bit int is 127
+
+        while dx != 0 or dy != 0:
+            # Determine the move for this chunk
+            move_dx = max(-MAX_MOVE, min(MAX_MOVE, dx))
+            move_dy = max(-MAX_MOVE, min(MAX_MOVE, dy))
+            
+            # Send the chunked move
+            await self._send_command(f"m:{move_dx},{move_dy}")
+            
+            # Decrement the remaining distance
+            dx -= move_dx
+            dy -= move_dy
+
     async def type_string(self, text: str):
         await self._send_command(f"k:{text}")
-
-    async def move_mouse_relative(self, x: int, y: int):
-        """Moves the mouse by a relative offset."""
-        await self._send_command(f"m:{x},{y}")
 
     async def click_at_position(self, x: int, y: int, click=True):
         """
@@ -100,6 +117,17 @@ class HIDController:
         await asyncio.sleep(0.05)
         if click:
             await self._send_command("mc:left")
+
+    async def reset_cursor_position(self):
+        """
+        Resets the cursor to the top-left origin (0,0) by sending a
+        series of large negative moves and resetting the internal state.
+        """
+        print("  - Resetting cursor to origin (0,0)...")
+        # The chunking logic in move_mouse_relative will handle this large move.
+        await self.move_mouse_relative(-5000, -5000)
+        self.current_pos = (0, 0)
+        await asyncio.sleep(0.05)
 
 class VisionController:
     """Captures video frames and uses Gemini to decide actions."""
@@ -270,8 +298,10 @@ async def main():
         vision.shutdown()
         return
 
-    # Initialize cursor position
+    # Initialize cursor position by resetting to origin
     print("\nInitializing cursor position...")
+    await hid.reset_cursor_position()
+    
     initial_frame = vision.capture_frame()
     if initial_frame is not None:
         bounds = vision.find_screen_bounds(initial_frame)
