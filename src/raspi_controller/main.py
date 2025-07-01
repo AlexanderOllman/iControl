@@ -15,6 +15,11 @@ DEVICE_NAME = "iControl HID"
 SERVICE_UUID = "c48e6067-5295-48d3-8d5c-0395f61792b1"
 CHARACTERISTIC_UUID = "c48e6068-5295-48d3-8d5c-0395f61792b1"
 
+# NEW: The destination coordinate space for the HID device (e.g., iPhone screen).
+# This may need some fine-tuning but is based on user observation.
+DEST_WIDTH = 280
+DEST_HEIGHT = 550
+
 # --- Gemini API Setup ---
 # IMPORTANT: Set your Gemini API key as an environment variable before running.
 # The google-generativeai library will automatically use it.
@@ -298,19 +303,12 @@ async def main():
         vision.shutdown()
         return
 
-    # Initialize cursor position by resetting to origin
+    # Initialize cursor position by resetting and moving to center of the DESTINATION space
     print("\nInitializing cursor position...")
     await hid.reset_cursor_position()
-    
-    initial_frame = vision.capture_frame()
-    if initial_frame is not None:
-        bounds = vision.find_screen_bounds(initial_frame)
-        if bounds:
-            sx, sy, sw, sh = bounds
-            # The first move establishes the origin for our state tracking.
-            center_x = sx + sw // 2
-            center_y = sy + sh // 2
-            await hid.click_at_position(center_x, center_y, click=False)
+    center_x = DEST_WIDTH // 2
+    center_y = DEST_HEIGHT // 2
+    await hid.click_at_position(center_x, center_y, click=False)
     print("Cursor initialized.")
 
     try:
@@ -319,21 +317,17 @@ async def main():
             if command.lower() == 'quit':
                 break
 
-            # Stage 1: See
             full_frame = vision.capture_frame()
             if full_frame is None:
                 continue
 
-            # Find the actual screen within the frame
             screen_bounds = vision.find_screen_bounds(full_frame)
             if screen_bounds is None:
                 continue
             
             sx, sy, sw, sh = screen_bounds
-            
-            # Crop the frame to just the screen content
             screen_crop = full_frame[sy:sy+sh, sx:sx+sw]
-            cv2.imwrite("capture_cropped.jpg", screen_crop) # Save for debugging
+            cv2.imwrite("capture_cropped.jpg", screen_crop)
 
             elements = await vision.get_visible_elements(screen_crop)
 
@@ -345,7 +339,6 @@ async def main():
             for i, element in enumerate(elements):
                 print(f"  {i+1}: {element['label']}")
 
-            # Stage 2: Decide and Act
             choice = await vision.choose_element_to_click(elements, command)
 
             if choice > 0 and choice <= len(elements):
@@ -358,15 +351,15 @@ async def main():
                 y1_rel = int(box[2] / 1000 * sh)
                 x1_rel = int(box[3] / 1000 * sw)
 
-                # Calculate the center of the bounding box relative to the CROPPED image
+                # Calculate the center of the bounding box in the CROPPED image space
                 click_x_rel = x0_rel + (x1_rel - x0_rel) // 2
                 click_y_rel = y0_rel + (y1_rel - y0_rel) // 2
 
-                # Remap the relative coordinates to the FULL frame's coordinate space
-                final_click_x = sx + click_x_rel
-                final_click_y = sy + click_y_rel
+                # --- NEW: Map from cropped image space to destination HID space ---
+                final_click_x = int((click_x_rel / sw) * DEST_WIDTH)
+                final_click_y = int((click_y_rel / sh) * DEST_HEIGHT)
                 
-                print(f"\nAction: Clicking on '{selected_element['label']}' at ({final_click_x}, {final_click_y})")
+                print(f"\nAction: Clicking on '{selected_element['label']}' at mapped coords ({final_click_x}, {final_click_y})")
                 await hid.click_at_position(final_click_x, final_click_y)
                 print("Action finished.")
 
