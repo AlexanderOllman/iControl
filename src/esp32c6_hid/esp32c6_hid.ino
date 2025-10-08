@@ -29,12 +29,29 @@ bool ledState = false;
 #define KEY_VO_MODIFIER_CTRL KEY_LEFT_CTRL
 #define KEY_VO_MODIFIER_ALT KEY_LEFT_ALT
 
+// Basic navigation
 #define KEY_VO_NEXT KEY_RIGHT_ARROW
 #define KEY_VO_PREVIOUS KEY_LEFT_ARROW
 #define KEY_VO_ACTIVATE ' '
 #define KEY_VO_HOME 'h'
 #define KEY_VO_BACK KEY_ESC
 #define KEY_VO_APP_SWITCHER 'h' // Press twice
+
+// Additional VoiceOver commands
+#define KEY_VO_SCROLL_UP KEY_UP_ARROW
+#define KEY_VO_SCROLL_DOWN KEY_DOWN_ARROW
+#define KEY_VO_FIRST_ITEM KEY_HOME
+#define KEY_VO_LAST_ITEM KEY_END
+#define KEY_VO_STATUS_BAR 'm'
+#define KEY_VO_NOTIFICATION_CENTER 'n'
+#define KEY_VO_CONTROL_CENTER 'c'
+#define KEY_VO_HELP '?'
+#define KEY_VO_ITEM_CHOOSER 'i'
+#define KEY_VO_MAGIC_TAP 'z' // Double tap with two fingers
+#define KEY_VO_ESCAPE KEY_ESC
+#define KEY_VO_TOGGLE_SCREEN_CURTAIN KEY_F11
+#define KEY_VO_ROTOR_NEXT '.'
+#define KEY_VO_ROTOR_PREVIOUS ','
 
 // Server callbacks to handle connection and disconnection
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -82,26 +99,46 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
             char key = value.charAt(3);
             if (key) {
                 keyboard.press(KEY_VO_MODIFIER_CTRL);
+                delay(10);
                 keyboard.press(KEY_VO_MODIFIER_ALT);
+                delay(10);
                 keyboard.press(key);
-                delay(50);
+                delay(100); // Hold longer for better iOS recognition
                 keyboard.releaseAll();
                 Serial.print("Pressed VO combo with key: ");
                 Serial.println(key);
             }
         } else if (value.startsWith("ko_special:")) { // Key Combo with VO and a special key
-            String keyStr = value.substring(11);
-            uint8_t keyCode = (uint8_t)keyStr.toInt();
-            if (keyCode > 0) {
+                String keyStr = value.substring(11);
+                uint8_t keyCode = (uint8_t)keyStr.toInt();
+                if (keyCode > 0) {
+                    // Press modifiers first and hold them
+                    keyboard.press(KEY_VO_MODIFIER_CTRL);
+                    delay(10); // Small delay to ensure iOS registers the first key
+                    keyboard.press(KEY_VO_MODIFIER_ALT);
+                    delay(10); // Small delay to ensure iOS registers the second key
+                    keyboard.press(keyCode);
+                    delay(100); // Hold all keys together for iOS to recognize as simultaneous
+                    keyboard.releaseAll();
+                    Serial.print("Pressed VO combo with special key: ");
+                    Serial.println(keyCode);
+                }
+            } else if (value.startsWith("vo_rotor:")) { // Rotor navigation
+                String direction = value.substring(9);
                 keyboard.press(KEY_VO_MODIFIER_CTRL);
+                delay(10);
                 keyboard.press(KEY_VO_MODIFIER_ALT);
-                keyboard.press(keyCode);
-                delay(50);
+                delay(10);
+                if (direction == "next") {
+                    keyboard.press(KEY_VO_ROTOR_NEXT);
+                } else if (direction == "previous") {
+                    keyboard.press(KEY_VO_ROTOR_PREVIOUS);
+                }
+                delay(100);
                 keyboard.releaseAll();
-                Serial.print("Pressed VO combo with special key: ");
-                Serial.println(keyCode);
-            }
-        } else if (value.startsWith("m:")) {
+                Serial.print("VO Rotor: ");
+                Serial.println(direction);
+            } else if (value.startsWith("m:")) {
           String coords = value.substring(2);
           int commaIndex = coords.indexOf(',');
           if (commaIndex != -1) {
@@ -149,6 +186,21 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
                 mouse.release(MOUSE_MIDDLE);
                 Serial.println("Mouse middle release");
             }
+        } else if (value.startsWith("ms:")) { // Mouse scroll
+            String scrollData = value.substring(3);
+            int commaIndex = scrollData.indexOf(',');
+            if (commaIndex != -1) {
+                int scrollX = scrollData.substring(0, commaIndex).toInt();
+                int scrollY = scrollData.substring(commaIndex + 1).toInt();
+                mouse.move(0, 0, scrollY); // USBHIDMouse scroll is the 3rd parameter
+                Serial.print("Mouse scroll: ");
+                Serial.print(scrollX);
+                Serial.print(",");
+                Serial.println(scrollY);
+            }
+        } else if (value == "ping") {
+            // Simple ping command for connection testing
+            Serial.println("Pong! Connection is alive.");
         }
       }
     }
